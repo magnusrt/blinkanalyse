@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Blinkanalyse">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="app-version" content="38cddcf9">
+<meta name="app-version" content="4bc4d5e4">
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -168,10 +168,13 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
 .grade p { margin: 0; font-size: 0.8rem; color: var(--muted); }
 .scale { position: relative; height: 8px; border-radius: 4px; overflow: hidden; display: flex; }
 .scale span { height: 100%; }
-.scale-wrap { position: relative; padding-top: 4px; }
+.scale-wrap { position: relative; }
+.scale-bar { position: relative; padding-block: 4px; }
 .scale-mark { position: absolute; top: 0; width: 2px; height: 16px; margin-left: -1px; background: var(--ink); border-radius: 1px; }
-.scale-lbl { display: flex; justify-content: space-between; font: 500 0.68rem var(--f-data); color: var(--muted); margin-top: 3px; position: relative; height: 1.1em; }
-.scale-lbl span { position: absolute; transform: translateX(-50%); }
+.scale-lbl { font: 500 0.68rem var(--f-data); color: var(--muted); position: relative; height: 1.1em; font-variant-numeric: tabular-nums; }
+.scale-lbl.top { margin-bottom: 1px; }
+.scale-lbl span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.scale-lbl span.unit { left: auto; right: 0; transform: none; font-family: var(--f-body); font-weight: 600; letter-spacing: 0.04em; }
 .ref-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-top: 10px; }
 .ref-grid .field input { width: 3.6em; }
 .ref-name { width: 100%; }
@@ -330,7 +333,11 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
       </div>
       <div class="grade" id="gradeBox" hidden>
         <div class="grade-top"><span class="pill" id="gradePill">–</span><span class="grade-val" id="gradeVal">–</span></div>
-        <div class="scale-wrap" aria-hidden="true"><div class="scale" id="gradeScale"></div><div class="scale-mark" id="gradeMark"></div><div class="scale-lbl" id="gradeLbl"></div></div>
+        <div class="scale-wrap" aria-hidden="true">
+          <div class="scale-lbl top" id="gradeLblTop"></div>
+          <div class="scale-bar"><div class="scale" id="gradeScale"></div><div class="scale-mark" id="gradeMark"></div></div>
+          <div class="scale-lbl" id="gradeLbl"></div>
+        </div>
         <p id="gradeNote">–</p>
       </div>
       <dl class="stats">
@@ -1390,15 +1397,22 @@ function gradeOf(st) {
   const L = refLimits(), i = eq <= L[0] ? 0 : eq <= L[1] ? 1 : eq <= L[2] ? 2 : 3;
   return { es, eq, n: st.n, cls: TIERS[i][0], label: TIERS[i][1], short: TIERS[i][2], tier: i };
 }
+const MOA_CM = 100 * Math.tan(Math.PI / 10800) * 100;   // 1 MOA at 100 m, in cm (2,909)
 function renderGrade(g) {
   $("gradeBox").hidden = !g; if (!g) return;
   const pill = $("gradePill"); pill.className = "pill " + g.cls; pill.textContent = g.label;
-  $("gradeVal").textContent = `${fmt(g.eq)} cm/100m som 5-skuddsgruppe`;
+  $("gradeVal").textContent = `${fmt(g.eq)} cm/100m som 5-skuddsgruppe · ${fmt(g.eq / MOA_CM, 2)} MOA · ${fmt(g.eq / 10, 2)} mil`;
   const L = refLimits(), max = Math.max(L[2] * 1.35, g.eq * 1.08), pct = v => (v / max * 100).toFixed(2) + "%";
   const segs = [[0, L[0], "g-best"], [L[0], L[1], "g-ok"], [L[1], L[2], "g-weak"], [L[2], max, "g-bad"]];
   $("gradeScale").innerHTML = segs.map(([a, b, c]) => `<span class="${c}" style="width:${pct(b - a)};background:var(--g);opacity:.6"></span>`).join("");
   $("gradeMark").style.left = pct(g.eq);
-  $("gradeLbl").innerHTML = L.map(t => `<span style="left:${pct(t)}">${fmt(t)}</span>`).join("");
+  // limits are in cm/100m; MOA above the bar, mil below (1 MOA = 2,909 cm and 1 mil = 10 cm at 100 m)
+  // labels close together: put the left one before its tick and the right one after it
+  const shift = L.map(() => "-50%");
+  for (let i = 0; i < L.length - 1; i++) if ((L[i + 1] - L[i]) / max < 0.16) { shift[i] = "calc(-100% + 3px)"; shift[i + 1] = "-3px"; }
+  const lbls = f => L.map((t, i) => `<span style="left:${pct(t)};transform:translateX(${shift[i]})">${f(t)}</span>`).join("");
+  $("gradeLblTop").innerHTML = lbls(t => fmt(t / MOA_CM, 2)) + `<span class="unit">MOA</span>`;
+  $("gradeLbl").innerHTML = lbls(t => fmt(t / 10, 2)) + `<span class="unit">mil</span>`;
   const parts = [];
   if (g.n === 2) parts.push(`Bare 2 skudd, så vurderingen er svært usikker (målt ${fmt(g.es)} cm/100m).`);
   else if (g.n !== 5) parts.push(`Omregnet fra ${g.n} skudd (målt ${fmt(g.es)} cm/100m).`);
@@ -1649,7 +1663,7 @@ function buildReport() {
       y += bh + 66 * U;
       if (g) {
         const pw = pill(g.label, PAD, y, g.cls, 30);
-        text(`${fmt(g.eq)} cm/100m som 5-skuddsgruppe${g.n !== 5 ? ` (omregnet fra ${g.n} skudd)` : ""}`, PAD + pw + 18 * U, y, F(400, 28), IMG.ink);
+        text(`${fmt(g.eq)} cm/100m som 5-skuddsgruppe · ${fmt(g.eq / MOA_CM, 2)} MOA · ${fmt(g.eq / 10, 2)} mil${g.n !== 5 ? ` (fra ${g.n} skudd)` : ""}`, PAD + pw + 18 * U, y, F(400, 26), IMG.ink);
         y += 76 * U;
       }
       const mx = st.mx / 10, my = st.my / 10, two = cm => `${fmt(cm)} cm  ·  ${fmt(cm * k)} cm/100m`;
