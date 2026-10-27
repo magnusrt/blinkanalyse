@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Blinkanalyse">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="app-version" content="a273c8eb">
+<meta name="app-version" content="3696493c">
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -335,6 +335,7 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
         <div><dt>Skudd</dt><dd id="sN">–</dd></div>
         <div><dt>Treffpunkt på blinken</dt><dd id="sPoi">–</dd></div>
         <div><dt>Spredning, senter–senter</dt><dd id="sEs">–</dd></div>
+        <div><dt>Ring rundt hullene (ytterkant)</dt><dd id="sRing">–</dd></div>
         <div><dt>Middelradius</dt><dd id="sMr">–</dd></div>
         <div><dt>Bredde × høyde</dt><dd id="sWh">–</dd></div>
       </dl>
@@ -889,6 +890,29 @@ function sampleBackingAt(A, x, y) {
 }
 
 /* ---------------- statistics ---------------- */
+// Smallest circle containing all points (Welzl, iterative). The group ring adds the bullet radius to it.
+function enclosingCircle(points) {
+  const P = points.map(p => ({ x: p.x, y: p.y }));
+  for (let i = P.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [P[i], P[j]] = [P[j], P[i]]; }
+  const inside = (p, c) => Math.hypot(p.x - c.x, p.y - c.y) <= c.r + 1e-7;
+  const two = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, r: Math.hypot(a.x - b.x, a.y - b.y) / 2 });
+  const three = (a, b, c) => {
+    const d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+    if (Math.abs(d) < 1e-12) { const o = [two(a, b), two(a, c), two(b, c)]; return o.reduce((m, q) => q.r > m.r ? q : m); }
+    const a2 = a.x * a.x + a.y * a.y, b2 = b.x * b.x + b.y * b.y, c2 = c.x * c.x + c.y * c.y;
+    const x = (a2 * (b.y - c.y) + b2 * (c.y - a.y) + c2 * (a.y - b.y)) / d, y = (a2 * (c.x - b.x) + b2 * (a.x - c.x) + c2 * (b.x - a.x)) / d;
+    return { x, y, r: Math.hypot(a.x - x, a.y - y) };
+  };
+  let c = { x: P[0].x, y: P[0].y, r: 0 };
+  for (let i = 1; i < P.length; i++) if (!inside(P[i], c)) {
+    c = { x: P[i].x, y: P[i].y, r: 0 };
+    for (let j = 0; j < i; j++) if (!inside(P[j], c)) {
+      c = two(P[i], P[j]);
+      for (let k = 0; k < j; k++) if (!inside(P[k], c)) c = three(P[i], P[j], P[k]);
+    }
+  }
+  return c;
+}
 function computeStats(holes, cal, aim) {
   const sx = cal.h / (2 * PG.MX), sy = cal.v / (2 * PG.MY), ax = aim ? aim.x : 0, ay = aim ? aim.y : 0;
   const P = holes.map(p => ({ x: (p.x - ax) * sx, y: (p.y - ay) * sy })), n = P.length;
@@ -900,7 +924,8 @@ function computeStats(holes, cal, aim) {
     minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
     for (let j = i + 1; j < n; j++) { const d = Math.hypot(p.x - P[j].x, p.y - P[j].y); if (d > es) { es = d; ei = [i, j]; } }
   }
-  return { n, mx, my, es, ei, mr: mr / n, wdt: maxX - minX, hgt: maxY - minY, sx, sy };
+  const ring = n >= 2 ? enclosingCircle(P) : null;           // around hole centres, mm on the target
+  return { n, mx, my, es, ei, mr: mr / n, wdt: maxX - minX, hgt: maxY - minY, sx, sy, ring, ringD: ring ? 2 * ring.r + T.CAL : 0 };
 }
 
 /* ---------------- sample photo (synthetic, for the opening state) ---------------- */
@@ -1150,6 +1175,21 @@ const holeHooks = {
       ctx.lineWidth = (sel ? 2.5 : 1.8) * L; ctx.strokeStyle = "#ff2d95"; ctx.stroke();
       ctx.fillStyle = "#ff2d95"; ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(1.5 * L, Math.min(3 * L, r * 0.12)), 0, Math.PI * 2); ctx.fill();
     });
+    const RING = "#FFD60A";
+    for (const g of groups) {
+      const st = g.st; if (!st.ring) continue;
+      const rc = S(g.aim.x + st.ring.x / st.sx, g.aim.y + st.ring.y / st.sy), rr = (st.ringD / 2) / ((st.sx + st.sy) / 2) * PPM * v.s;
+      for (const [w, col] of [[4.5 * L, "rgba(0,0,0,.55)"], [2 * L, RING]]) { ctx.lineWidth = w; ctx.strokeStyle = col; ctx.beginPath(); ctx.arc(rc.x, rc.y, rr, 0, Math.PI * 2); ctx.stroke(); }
+      const txt = `Ø ${fmt(st.ringD / 10 * 100 / state.dist)} cm/100m`;
+      ctx.font = `600 ${Math.round(12 * L)}px ${css("--f-body") || "system-ui, sans-serif"}`;
+      const tw = ctx.measureText(txt).width, ph = 18 * L, pw = tw + 12 * L, a = -Math.PI / 4;
+      let lx = rc.x + Math.cos(a) * (rr + 6 * L), ly = rc.y + Math.sin(a) * (rr + 6 * L) - ph;
+      const W = v.W || ctx.canvas.width / (v.dpr || 1);
+      if (lx + pw > W - 4) lx = rc.x - Math.cos(a) * (rr + 6 * L) - pw;      // no room on the right: put it top left
+      if (ly < 4) ly = rc.y + rr + 6 * L;
+      ctx.fillStyle = "rgba(10,12,11,.82)"; rrect(ctx, lx, ly, pw, ph, ph / 2); ctx.fill();
+      ctx.fillStyle = RING; ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(txt, lx + 6 * L, ly + ph / 2 + 0.5 * L); ctx.textBaseline = "alphabetic";
+    }
     for (const g of groups) {
       const st = g.st; if (!st.n) continue;
       const c = S(g.aim.x + st.mx / st.sx, g.aim.y + st.my / st.sy), o = S(g.aim.x, g.aim.y), len = Math.hypot(o.x - c.x, o.y - c.y);
@@ -1324,8 +1364,8 @@ function updateLoadTable() {
 }
 function loadTableText() {
   const k = 100 / state.dist, rows = loadRows(), f = v => fmt(v), off = SHEETS[state.sheet].offset;
-  const lines = [`Ladningstest .308 · ${SHEETS[state.sheet].label} · ${fmt(state.dist, 0)} m · verdier i cm/100m · referanse: ${state.ref.name}`, ["Nr", "Ladning (gr)", "Skudd", "Spredning", "Som 5 skudd", "Middelradius", "Høyde", "Side", "Vurdering"].join("\t")];
-  rows.forEach((st, i) => { const g = gradeOf(st), nr = off + i + 1; lines.push([nr, state.loads[nr - 1] || "", st.n, st.n >= 2 ? f(st.es / 10 * k) : "", g ? f(g.eq) : "", st.n >= 2 ? f(st.mr / 10 * k) : "", st.n ? signed(st.my / 10 * k) : "", st.n ? signed(st.mx / 10 * k) : "", g ? g.short : ""].join("\t")); });
+  const lines = [`Ladningstest .308 · ${SHEETS[state.sheet].label} · ${fmt(state.dist, 0)} m · verdier i cm/100m · referanse: ${state.ref.name}`, ["Nr", "Ladning (gr)", "Skudd", "Spredning", "Som 5 skudd", "Ring ytterkant", "Middelradius", "Høyde", "Side", "Vurdering"].join("\t")];
+  rows.forEach((st, i) => { const g = gradeOf(st), nr = off + i + 1; lines.push([nr, state.loads[nr - 1] || "", st.n, st.n >= 2 ? f(st.es / 10 * k) : "", g ? f(g.eq) : "", st.n >= 2 ? f(st.ringD / 10 * k) : "", st.n >= 2 ? f(st.mr / 10 * k) : "", st.n ? signed(st.my / 10 * k) : "", st.n ? signed(st.mx / 10 * k) : "", g ? g.short : ""].join("\t")); });
   return lines.join("\n");
 }
 function updateReadout() {
@@ -1339,7 +1379,7 @@ function updateReadout() {
   renderGrade(gradeOf(st));
   if (!st.n) {
     clearTurret($("tElev")); clearTurret($("tWind"));
-    for (const id of ["sPoi", "sEs", "sMr", "sWh"]) $(id).textContent = "–";
+    for (const id of ["sPoi", "sEs", "sRing", "sMr", "sWh"]) $(id).textContent = "–";
     viewer.req(); return;
   }
   const mx = st.mx / 10, my = st.my / 10;
@@ -1348,9 +1388,9 @@ function updateReadout() {
   $("sPoi").innerHTML = `${fmt(Math.abs(mx))} cm ${mx >= 0 ? "høyre" : "venstre"} · ${fmt(Math.abs(my))} cm ${my >= 0 ? "høyt" : "lavt"}`;
   const two = (cm) => `${fmt(cm)} cm<small>${fmt(cm * k)} cm/100m</small>`;
   if (st.n >= 2) {
-    $("sEs").innerHTML = two(st.es / 10); $("sMr").innerHTML = two(st.mr / 10);
+    $("sEs").innerHTML = two(st.es / 10); $("sRing").innerHTML = two(st.ringD / 10); $("sMr").innerHTML = two(st.mr / 10);
     $("sWh").innerHTML = `${fmt(st.wdt / 10)} × ${fmt(st.hgt / 10)} cm<small>${fmt(st.wdt / 10 * k)} × ${fmt(st.hgt / 10 * k)} cm/100m</small>`;
-  } else for (const id of ["sEs", "sMr", "sWh"]) $(id).textContent = "trenger 2+ skudd";
+  } else for (const id of ["sEs", "sRing", "sMr", "sWh"]) $(id).textContent = "trenger 2+ skudd";
   viewer.req();
 }
 function markSample(on) { state.sample = on; $("sampleTag").hidden = !on; $("roTag").hidden = !on; }
@@ -1484,7 +1524,7 @@ function buildReport() {
   // target with markings
   const top = Math.round(y);
   c.drawImage(tgt, PAD, top);
-  const v = { s: ppmR / PPM, tx: PAD - (PG.W / 2 + x0) * ppmR, ty: top + (y1 - PG.H / 2) * ppmR, lw: Math.max(1, ppmR / 3), report: true, accent: IMG.accent,
+  const v = { W: PAD + tgt.width, s: ppmR / PPM, tx: PAD - (PG.W / 2 + x0) * ppmR, ty: top + (y1 - PG.H / 2) * ppmR, lw: Math.max(1, ppmR / 3), report: true, accent: IMG.accent,
     toS(u, vv) { return { x: u * this.s + this.tx, y: vv * this.s + this.ty }; } };
   c.save(); c.beginPath(); c.rect(PAD, top, tgt.width, tgt.height); c.clip(); holeHooks.overlay(c, v); c.restore();
   c.strokeStyle = IMG.line; c.lineWidth = 2 * U; c.strokeRect(PAD, top, tgt.width, tgt.height);
@@ -1524,7 +1564,7 @@ function buildReport() {
       const mx = st.mx / 10, my = st.my / 10, two = cm => `${fmt(cm)} cm  ·  ${fmt(cm * k)} cm/100m`;
       row("Skudd", String(st.n));
       row("Treffpunkt på blinken", `${fmt(Math.abs(mx))} cm ${mx >= 0 ? "høyre" : "venstre"}  ·  ${fmt(Math.abs(my))} cm ${my >= 0 ? "høyt" : "lavt"}`);
-      if (st.n >= 2) { row("Spredning, senter–senter", two(st.es / 10)); row("Middelradius", two(st.mr / 10)); row("Bredde × høyde", `${fmt(st.wdt / 10)} × ${fmt(st.hgt / 10)} cm`); }
+      if (st.n >= 2) { row("Spredning, senter–senter", two(st.es / 10)); row("Ring rundt hullene (ytterkant)", two(st.ringD / 10)); row("Middelradius", two(st.mr / 10)); row("Bredde × høyde", `${fmt(st.wdt / 10)} × ${fmt(st.hgt / 10)} cm`); }
       text("1 klikk = 0,1 mrad = 1 cm/100m. Korreksjonen flytter treffpunktet til siktepunktet.", PAD, y - 10 * U, F(400, 24), IMG.muted);
       y += 30 * U;
     } else { y += 40 * U; text("Ingen hull markert.", PAD, y, F(400, 30), IMG.muted); y += 60 * U; }
@@ -1792,7 +1832,7 @@ const savedLoads = store.get("loads", null);
 if (Array.isArray(savedLoads)) state.loads = Array.from({ length: 12 }, (_, i) => String(savedLoads[i] || ""));
 buildLoadTable();
 
-window.__ba = { buildReport, enterMarkers, state, T, PPM, findMarkers, findMarkersGray, rectify, analyseRect, detectHoles, computeStats, processSource, sourceFromCanvas, SAMPLE_TRUTH, makeSamplePhoto };
+window.__ba = { enclosingCircle, buildReport, enterMarkers, state, T, PPM, findMarkers, findMarkersGray, rectify, analyseRect, detectHoles, computeStats, processSource, sourceFromCanvas, SAMPLE_TRUTH, makeSamplePhoto };
 
 (async () => {
   await frame();
