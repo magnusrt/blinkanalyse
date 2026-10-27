@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Blinkanalyse">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="app-version" content="3696493c">
+<meta name="app-version" content="fb0920fd">
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -335,7 +335,7 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
         <div><dt>Skudd</dt><dd id="sN">–</dd></div>
         <div><dt>Treffpunkt på blinken</dt><dd id="sPoi">–</dd></div>
         <div><dt>Spredning, senter–senter</dt><dd id="sEs">–</dd></div>
-        <div><dt>Ring rundt hullene (ytterkant)</dt><dd id="sRing">–</dd></div>
+        <div><dt>Ring, senter–senter</dt><dd id="sRing">–</dd></div>
         <div><dt>Middelradius</dt><dd id="sMr">–</dd></div>
         <div><dt>Bredde × høyde</dt><dd id="sWh">–</dd></div>
       </dl>
@@ -890,7 +890,7 @@ function sampleBackingAt(A, x, y) {
 }
 
 /* ---------------- statistics ---------------- */
-// Smallest circle containing all points (Welzl, iterative). The group ring adds the bullet radius to it.
+// Smallest circle containing all points (Welzl, iterative). The group ring goes through the outermost hole centres.
 function enclosingCircle(points) {
   const P = points.map(p => ({ x: p.x, y: p.y }));
   for (let i = P.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [P[i], P[j]] = [P[j], P[i]]; }
@@ -925,7 +925,7 @@ function computeStats(holes, cal, aim) {
     for (let j = i + 1; j < n; j++) { const d = Math.hypot(p.x - P[j].x, p.y - P[j].y); if (d > es) { es = d; ei = [i, j]; } }
   }
   const ring = n >= 2 ? enclosingCircle(P) : null;           // around hole centres, mm on the target
-  return { n, mx, my, es, ei, mr: mr / n, wdt: maxX - minX, hgt: maxY - minY, sx, sy, ring, ringD: ring ? 2 * ring.r + T.CAL : 0 };
+  return { n, mx, my, es, ei, mr: mr / n, wdt: maxX - minX, hgt: maxY - minY, sx, sy, ring, ringD: ring ? 2 * ring.r : 0 };
 }
 
 /* ---------------- sample photo (synthetic, for the opening state) ---------------- */
@@ -1364,7 +1364,7 @@ function updateLoadTable() {
 }
 function loadTableText() {
   const k = 100 / state.dist, rows = loadRows(), f = v => fmt(v), off = SHEETS[state.sheet].offset;
-  const lines = [`Ladningstest .308 · ${SHEETS[state.sheet].label} · ${fmt(state.dist, 0)} m · verdier i cm/100m · referanse: ${state.ref.name}`, ["Nr", "Ladning (gr)", "Skudd", "Spredning", "Som 5 skudd", "Ring ytterkant", "Middelradius", "Høyde", "Side", "Vurdering"].join("\t")];
+  const lines = [`Ladningstest .308 · ${SHEETS[state.sheet].label} · ${fmt(state.dist, 0)} m · verdier i cm/100m · referanse: ${state.ref.name}`, ["Nr", "Ladning (gr)", "Skudd", "Spredning", "Som 5 skudd", "Ring senter–senter", "Middelradius", "Høyde", "Side", "Vurdering"].join("\t")];
   rows.forEach((st, i) => { const g = gradeOf(st), nr = off + i + 1; lines.push([nr, state.loads[nr - 1] || "", st.n, st.n >= 2 ? f(st.es / 10 * k) : "", g ? f(g.eq) : "", st.n >= 2 ? f(st.ringD / 10 * k) : "", st.n >= 2 ? f(st.mr / 10 * k) : "", st.n ? signed(st.my / 10 * k) : "", st.n ? signed(st.mx / 10 * k) : "", g ? g.short : ""].join("\t")); });
   return lines.join("\n");
 }
@@ -1564,7 +1564,7 @@ function buildReport() {
       const mx = st.mx / 10, my = st.my / 10, two = cm => `${fmt(cm)} cm  ·  ${fmt(cm * k)} cm/100m`;
       row("Skudd", String(st.n));
       row("Treffpunkt på blinken", `${fmt(Math.abs(mx))} cm ${mx >= 0 ? "høyre" : "venstre"}  ·  ${fmt(Math.abs(my))} cm ${my >= 0 ? "høyt" : "lavt"}`);
-      if (st.n >= 2) { row("Spredning, senter–senter", two(st.es / 10)); row("Ring rundt hullene (ytterkant)", two(st.ringD / 10)); row("Middelradius", two(st.mr / 10)); row("Bredde × høyde", `${fmt(st.wdt / 10)} × ${fmt(st.hgt / 10)} cm`); }
+      if (st.n >= 2) { row("Spredning, senter–senter", two(st.es / 10)); row("Ring, senter–senter", two(st.ringD / 10)); row("Middelradius", two(st.mr / 10)); row("Bredde × høyde", `${fmt(st.wdt / 10)} × ${fmt(st.hgt / 10)} cm`); }
       text("1 klikk = 0,1 mrad = 1 cm/100m. Korreksjonen flytter treffpunktet til siktepunktet.", PAD, y - 10 * U, F(400, 24), IMG.muted);
       y += 30 * U;
     } else { y += 40 * U; text("Ingen hull markert.", PAD, y, F(400, 30), IMG.muted); y += 60 * U; }
