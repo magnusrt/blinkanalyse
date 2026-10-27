@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Blinkanalyse">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="app-version" content="fb0920fd">
+<meta name="app-version" content="38cddcf9">
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -86,6 +86,7 @@ body { background: var(--bg); color: var(--ink); font-family: var(--f-body); fon
 .btn:hover { border-color: color-mix(in srgb, var(--ink) 35%, var(--line)); }
 .btn:focus-visible, .chip:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .btn[disabled] { opacity: 0.45; cursor: default; }
+.btn[aria-pressed="true"] { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
 .btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .btn-primary:hover { border-color: var(--accent); filter: brightness(1.06); }
 .btn svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -284,6 +285,7 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
       <div class="tools" id="toolsHoles">
         <button class="btn" id="bPick" type="button"><svg viewBox="0 0 24 24"><path d="M14 4l6 6-9 9H5v-6z"/><path d="M12 6l6 6"/></svg>Velg farge</button>
         <button class="btn" id="bRedetect" type="button"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg>Finn hull på nytt</button>
+        <button class="btn" id="bSnap" type="button" aria-pressed="true" title="Flytter manuelt plasserte hull til sentrum av hullet i bildet"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.5"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/></svg><span id="bSnapTxt">Finjuster: på</span></button>
         <button class="btn" id="bDelete" type="button" disabled><svg viewBox="0 0 24 24"><path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"/></svg>Slett valgt</button>
         <button class="btn" id="bSave" type="button"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 19h14"/></svg>Lagre bilde</button>
         <span class="spacer"></span>
@@ -336,7 +338,7 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
         <div><dt>Treffpunkt på blinken</dt><dd id="sPoi">–</dd></div>
         <div><dt>Spredning, senter–senter</dt><dd id="sEs">–</dd></div>
         <div><dt>Ring, senter–senter</dt><dd id="sRing">–</dd></div>
-        <div><dt>Middelradius</dt><dd id="sMr">–</dd></div>
+        <div><dt>Middelradius fra gruppesenter</dt><dd id="sMr">–</dd></div>
         <div><dt>Bredde × høyde</dt><dd id="sWh">–</dd></div>
       </dl>
       <p class="ro-note" id="roNote">Korreksjonen flytter treffpunktet til siktepunktet. Verdiene er i cm/100m, der 1 cm/100m = 0,1 mrad = 1 klikk.</p>
@@ -781,7 +783,7 @@ function kmeans(px, py, k) {
   return cx.map((x, j) => ({ x, y: cy[j] }));
 }
 // Refine centres of merged holes: fit circles of a common radius to the blob outline.
-function fitCircles(bx, by, cs, R0) {
+function fitCircles(bx, by, cs, R0, maxMove) {
   let C = cs.map(c => ({ x: c.x, y: c.y })), R = R0;
   for (let it = 0; it < 15; it++) {
     const groups = C.map(() => []);
@@ -806,7 +808,8 @@ function fitCircles(bx, by, cs, R0) {
     if (dn) R = clamp(dsum / dn, R0 * 0.75, R0 * 1.25);
     if (moved < 0.02) break;
   }
-  return C.map((c, j) => (Math.hypot(c.x - cs[j].x, c.y - cs[j].y) > R0 * 0.9 ? cs[j] : c));
+  const lim = maxMove || R0 * 0.9;
+  return C.map((c, j) => (Math.hypot(c.x - cs[j].x, c.y - cs[j].y) > lim ? cs[j] : c));
 }
 function detectHoles(A, backingIn, forceDark, expected) {
   const { u0, v0, w, h, N, H, S, V, Y, tm } = A;
@@ -1115,7 +1118,7 @@ const $ = id => document.getElementById(id);
 const state = {
   src: null, markers: null, markersEdit: null, rect: null, A: null, det: null, holes: [], selected: -1,
   backingManual: null, pick: false, sample: true, view: "holes", zoomedGroup: false, shots: 0,
-  sheet: "single", sheetAuto: true, loads: Array(12).fill(""),
+  sheet: "single", sheetAuto: true, snap: true, loads: Array(12).fill(""),
   dist: 100, cals: { A3: { h: 250, v: 370 }, A4: { h: 176.8, v: 261.6 } }, cal: null, refs: null
 };
 const store = {
@@ -1131,6 +1134,74 @@ function setHint(msg) { $("hint").hidden = !msg; if (msg) $("hint").textContent 
 const HINT_HOLES = "Trykk for å legge til hull · dra et hull for å flytte · klyp for å zoome";
 
 function holeRadiusD() { return (T.CAL / 2) / ((state.cal.h / (2 * PG.MX) + state.cal.v / (2 * PG.MY)) / 2); }
+/* Snap a manually placed hole to the centre of the hole in the photo.
+   Looks within about one calibre of the tap, builds a local hole mask (backing colour, or dark against
+   the paper), then takes the blob's centroid for a single hole, or fits a calibre-sized circle to the
+   blob outline for touching holes. Returns null when the evidence is weak, so the tap position stands. */
+function refineHole(x, y, skip = -1) {
+  const A = state.A, det = state.det; if (!A) return null;
+  const p = D2R(x, y), cu = p.u - A.u0, cv = p.v - A.v0, R = (T.CAL / 2) * PPM, win = Math.ceil(R * 2.4);
+  const x0 = Math.max(0, Math.floor(cu - win)), x1 = Math.min(A.w - 1, Math.ceil(cu + win));
+  const y0 = Math.max(0, Math.floor(cv - win)), y1 = Math.min(A.h - 1, Math.ceil(cv + win));
+  if (x1 - x0 < R || y1 - y0 < R) return null;
+  const ww = x1 - x0 + 1, hh = y1 - y0 + 1, m = new Uint8Array(ww * hh);
+  if (det && det.mode === "color" && det.backing) {
+    const bk = det.backing, nearOrange = hueDist(bk.h, 25) < 40, sMin = Math.max(0.12, 0.35 * bk.s);
+    for (let yy = 0; yy < hh; yy++) for (let xx = 0; xx < ww; xx++) {
+      const i = (yy + y0) * A.w + xx + x0, t = A.tm[i];
+      m[yy * ww + xx] = (t !== 4 && A.S[i] >= sMin && A.V[i] >= 0.06 && hueDist(A.H[i], bk.h) <= 32 && !(nearOrange && t === 2)) ? 1 : 0;
+    }
+  } else {
+    const paper = [];
+    for (let yy = 0; yy < hh; yy += 2) for (let xx = 0; xx < ww; xx += 2) { const i = (yy + y0) * A.w + xx + x0; if (A.tm[i] === 0) paper.push(A.Y[i]); }
+    if (paper.length < 20) return null;
+    const bg = quantile(paper, 0.8);
+    for (let yy = 0; yy < hh; yy++) for (let xx = 0; xx < ww; xx++) {
+      const i = (yy + y0) * A.w + xx + x0;
+      m[yy * ww + xx] = (A.tm[i] === 0 && bg - A.Y[i] > Math.max(40, 0.25 * bg)) ? 1 : 0;
+    }
+  }
+  const { lab, stats } = labelCC(m, ww, hh, true), disc = Math.PI * R * R, tx = cu - x0, ty = cv - y0;
+  let comp = null;
+  const at = lab[Math.min(hh - 1, Math.max(0, Math.round(ty))) * ww + Math.min(ww - 1, Math.max(0, Math.round(tx)))];
+  if (at) comp = stats[at - 1];
+  if (!comp) {            // tap slightly off the hole: nearest sizeable blob within one calibre
+    let bd = R * 1.6;
+    for (const st of stats) { if (st.area < 0.25 * disc) continue; const d = Math.hypot(st.sx / st.area - tx, st.sy / st.area - ty); if (d < bd) { bd = d; comp = st; } }
+  }
+  if (!comp || comp.area < 0.25 * disc) return null;
+  let cx, cy;
+  const bw = comp.x1 - comp.x0 + 1, bh = comp.y1 - comp.y0 + 1;
+  if (!comp.border && comp.area <= 1.45 * disc && bw / bh > 0.7 && bw / bh < 1.43) { cx = comp.sx / comp.area; cy = comp.sy / comp.area; }
+  else {
+    const bx = [], by = [];
+    for (let yy = comp.y0; yy <= comp.y1; yy++) for (let xx = comp.x0; xx <= comp.x1; xx++) {
+      const i = yy * ww + xx; if (lab[i] !== comp.id) continue;
+      if (xx === 0 || yy === 0 || xx === ww - 1 || yy === hh - 1) continue;      // window edge is not a hole edge
+      if (lab[i - 1] !== comp.id || lab[i + 1] !== comp.id || lab[i - ww] !== comp.id || lab[i + ww] !== comp.id) { bx.push(xx); by.push(yy); }
+    }
+    if (bx.length < 12) return null;
+    // touching holes: fit this hole together with the already marked neighbours, so their edges are not mistaken for this one
+    const toLocal = h => { const q = D2R(h.x, h.y); return { x: q.u - A.u0 - x0, y: q.v - A.v0 - y0 }; };
+    const others = state.holes.filter((h, i) => i !== skip).map(toLocal)
+      .filter(q => q.x > -R && q.y > -R && q.x < ww + R && q.y < hh + R);
+    const init = { x: tx, y: ty }, R0 = R * 0.92, C = fitCircles(bx, by, [init, ...others], R0, R * 1.25), c = C[0];
+    if (c === init) return null;                 // the fit did not settle on a hole: leave the tap where it is
+    // trust it only if enough of this hole's own edge is visible (not hidden inside its neighbours)
+    const sectors = new Set();
+    for (let k = 0; k < bx.length; k++) {
+      const e0 = Math.abs(Math.hypot(bx[k] - c.x, by[k] - c.y) - R0); if (e0 > 0.3 * R0) continue;
+      let mine = true;
+      for (let j = 1; j < C.length; j++) if (Math.abs(Math.hypot(bx[k] - C[j].x, by[k] - C[j].y) - R0) < e0) { mine = false; break; }
+      if (mine) sectors.add(Math.floor((Math.atan2(by[k] - c.y, bx[k] - c.x) + Math.PI) / (2 * Math.PI) * 16) % 16);
+    }
+    if (sectors.size < 5) return null;
+    if (others.some(q => Math.hypot(q.x - c.x, q.y - c.y) < R * 0.6)) return null;   // landed on a hole that is already marked
+    cx = c.x; cy = c.y;
+  }
+  if (Math.hypot(cx - tx, cy - ty) > R * 1.3) return null;
+  return R2D(A.u0 + x0 + cx + 0.5, A.v0 + y0 + cy + 0.5);
+}
 const holeHooks = {
   hit(cx, cy, v) {
     const lim = Math.max(holeRadiusD() * 1.25 * PPM, 22 / v.s); let bi = -1, bd = lim;
@@ -1140,7 +1211,12 @@ const holeHooks = {
   itemPos(i) { const p = D2R(state.holes[i].x, state.holes[i].y); return { x: p.u, y: p.v }; },
   dragStart(i) { state.selected = i; updateDeleteBtn(); },
   drag(i, x, y) { const p = R2D(x, y); state.holes[i].x = p.x; state.holes[i].y = p.y; state.holes[i].src = "manual"; updateReadout(); },
-  dragEnd(i) { state.selected = i; updateDeleteBtn(); viewer.req(); },
+  dragEnd(i) {
+    state.selected = i; updateDeleteBtn();
+    const h = state.holes[i];
+    if (h && state.snap) { const r = refineHole(h.x, h.y, i); if (r) { h.x = r.x; h.y = r.y; setStatus("Hullet er finjustert til sentrum av hullet."); } }
+    updateReadout(); viewer.req();
+  },
   tap(cx, cy, hit) {
     const p = R2D(cx, cy);
     if (state.pick) {
@@ -1150,7 +1226,11 @@ const holeHooks = {
       state.backingManual = bk; redetect(); return;
     }
     if (hit >= 0) state.selected = state.selected === hit ? -1 : hit;
-    else { state.holes.push({ x: p.x, y: p.y, src: "manual" }); state.selected = state.holes.length - 1; setStatus("Hull lagt til. Dra det på plass om det ikke sitter midt i hullet."); }
+    else {
+      const r = state.snap ? refineHole(p.x, p.y) : null;
+      state.holes.push({ x: r ? r.x : p.x, y: r ? r.y : p.y, src: "manual" }); state.selected = state.holes.length - 1;
+      setStatus(r ? "Hull lagt til og finjustert til sentrum av hullet." : "Hull lagt til. Dra det på plass om det ikke sitter midt i hullet.");
+    }
     updateDeleteBtn(); updateReadout(); viewer.req();
   },
   overlay(ctx, v) {
@@ -1175,20 +1255,31 @@ const holeHooks = {
       ctx.lineWidth = (sel ? 2.5 : 1.8) * L; ctx.strokeStyle = "#ff2d95"; ctx.stroke();
       ctx.fillStyle = "#ff2d95"; ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(1.5 * L, Math.min(3 * L, r * 0.12)), 0, Math.PI * 2); ctx.fill();
     });
-    const RING = "#FFD60A";
+    const RING = "#FFD60A", MRC = "#22D3EE", k100 = 100 / state.dist, sc = st => ((st.sx + st.sy) / 2);
     for (const g of groups) {
       const st = g.st; if (!st.ring) continue;
-      const rc = S(g.aim.x + st.ring.x / st.sx, g.aim.y + st.ring.y / st.sy), rr = (st.ringD / 2) / ((st.sx + st.sy) / 2) * PPM * v.s;
+      // extreme-spread ring: smallest circle through the outermost hole centres (solid yellow)
+      const rc = S(g.aim.x + st.ring.x / st.sx, g.aim.y + st.ring.y / st.sy), rr = (st.ringD / 2) / sc(st) * PPM * v.s;
       for (const [w, col] of [[4.5 * L, "rgba(0,0,0,.55)"], [2 * L, RING]]) { ctx.lineWidth = w; ctx.strokeStyle = col; ctx.beginPath(); ctx.arc(rc.x, rc.y, rr, 0, Math.PI * 2); ctx.stroke(); }
-      const txt = `Ø ${fmt(st.ringD / 10 * 100 / state.dist)} cm/100m`;
+      // mean-radius ring around the group centre (dashed cyan)
+      const mc = S(g.aim.x + st.mx / st.sx, g.aim.y + st.my / st.sy), mrr = st.mr / sc(st) * PPM * v.s;
+      ctx.setLineDash([6 * L, 4 * L]);
+      for (const [w, col] of [[4 * L, "rgba(0,0,0,.5)"], [1.8 * L, MRC]]) { ctx.lineWidth = w; ctx.strokeStyle = col; ctx.beginPath(); ctx.arc(mc.x, mc.y, mrr, 0, Math.PI * 2); ctx.stroke(); }
+      ctx.setLineDash([]);
+      // labels, stacked at the ring's upper right
+      const labels = [[`Ø ${fmt(st.ringD / 10 * k100)} cm/100m`, RING], [`MR ${fmt(st.mr / 10 * k100)} cm/100m`, MRC]];
       ctx.font = `600 ${Math.round(12 * L)}px ${css("--f-body") || "system-ui, sans-serif"}`;
-      const tw = ctx.measureText(txt).width, ph = 18 * L, pw = tw + 12 * L, a = -Math.PI / 4;
+      const ph = 18 * L, gap = 3 * L, pw = Math.max(...labels.map(([t]) => ctx.measureText(t).width)) + 12 * L, a = -Math.PI / 4;
       let lx = rc.x + Math.cos(a) * (rr + 6 * L), ly = rc.y + Math.sin(a) * (rr + 6 * L) - ph;
       const W = v.W || ctx.canvas.width / (v.dpr || 1);
-      if (lx + pw > W - 4) lx = rc.x - Math.cos(a) * (rr + 6 * L) - pw;      // no room on the right: put it top left
+      if (lx + pw > W - 4) lx = rc.x - Math.cos(a) * (rr + 6 * L) - pw;      // no room on the right: put them top left
       if (ly < 4) ly = rc.y + rr + 6 * L;
-      ctx.fillStyle = "rgba(10,12,11,.82)"; rrect(ctx, lx, ly, pw, ph, ph / 2); ctx.fill();
-      ctx.fillStyle = RING; ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(txt, lx + 6 * L, ly + ph / 2 + 0.5 * L); ctx.textBaseline = "alphabetic";
+      labels.forEach(([txt, col], i) => {
+        const y = ly + i * (ph + gap);
+        ctx.fillStyle = "rgba(10,12,11,.82)"; rrect(ctx, lx, y, pw, ph, ph / 2); ctx.fill();
+        ctx.fillStyle = col; ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(txt, lx + 6 * L, y + ph / 2 + 0.5 * L);
+      });
+      ctx.textBaseline = "alphabetic";
     }
     for (const g of groups) {
       const st = g.st; if (!st.n) continue;
@@ -1564,7 +1655,7 @@ function buildReport() {
       const mx = st.mx / 10, my = st.my / 10, two = cm => `${fmt(cm)} cm  ·  ${fmt(cm * k)} cm/100m`;
       row("Skudd", String(st.n));
       row("Treffpunkt på blinken", `${fmt(Math.abs(mx))} cm ${mx >= 0 ? "høyre" : "venstre"}  ·  ${fmt(Math.abs(my))} cm ${my >= 0 ? "høyt" : "lavt"}`);
-      if (st.n >= 2) { row("Spredning, senter–senter", two(st.es / 10)); row("Ring, senter–senter", two(st.ringD / 10)); row("Middelradius", two(st.mr / 10)); row("Bredde × høyde", `${fmt(st.wdt / 10)} × ${fmt(st.hgt / 10)} cm`); }
+      if (st.n >= 2) { row("Spredning, senter–senter", two(st.es / 10)); row("Ring, senter–senter", two(st.ringD / 10)); row("Middelradius fra gruppesenter", two(st.mr / 10)); row("Bredde × høyde", `${fmt(st.wdt / 10)} × ${fmt(st.hgt / 10)} cm`); }
       text("1 klikk = 0,1 mrad = 1 cm/100m. Korreksjonen flytter treffpunktet til siktepunktet.", PAD, y - 10 * U, F(400, 24), IMG.muted);
       y += 30 * U;
     } else { y += 40 * U; text("Ingen hull markert.", PAD, y, F(400, 30), IMG.muted); y += 60 * U; }
@@ -1781,6 +1872,10 @@ if (!IN_CLAUDE) {
   window.addEventListener("appinstalled", hide);
 }
 
+function showSnap() { $("bSnap").setAttribute("aria-pressed", state.snap); $("bSnap").classList.toggle("btn-primary", false); $("bSnapTxt").textContent = state.snap ? "Finjuster: på" : "Finjuster: av"; }
+state.snap = store.get("snap", true); showSnap();
+$("bSnap").addEventListener("click", () => { state.snap = !state.snap; store.set("snap", state.snap); showSnap(); setStatus(state.snap ? "Hull du plasserer eller flytter, finjusteres til sentrum av hullet." : "Finjustering er av. Hullene blir stående der du plasserer dem."); });
+
 /* ---------------- wiring ---------------- */
 $("view").addEventListener("pointerdown", () => { if (!state.pick && state.view === "holes") setHint(null); });
 $("fileCam").addEventListener("change", onFile);
@@ -1832,7 +1927,7 @@ const savedLoads = store.get("loads", null);
 if (Array.isArray(savedLoads)) state.loads = Array.from({ length: 12 }, (_, i) => String(savedLoads[i] || ""));
 buildLoadTable();
 
-window.__ba = { enclosingCircle, buildReport, enterMarkers, state, T, PPM, findMarkers, findMarkersGray, rectify, analyseRect, detectHoles, computeStats, processSource, sourceFromCanvas, SAMPLE_TRUTH, makeSamplePhoto };
+window.__ba = { refineHole, enclosingCircle, buildReport, enterMarkers, state, T, PPM, findMarkers, findMarkersGray, rectify, analyseRect, detectHoles, computeStats, processSource, sourceFromCanvas, SAMPLE_TRUTH, makeSamplePhoto };
 
 (async () => {
   await frame();
