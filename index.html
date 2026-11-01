@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Blinkanalyse">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="app-version" content="4bc4d5e4">
+<meta name="app-version" content="a76c8066">
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -207,6 +207,11 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
 .print-item .pi-msg.warn { color: var(--accent); }
 .print-tips { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; font-size: 0.84rem; color: var(--ink); max-width: 70ch; }
 .modal-box.wide { width: min(860px, 100%); }
+.dbg-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 0.88rem; cursor: pointer; }
+.dbg-row input { width: 18px; height: 18px; accent-color: var(--accent); }
+#dbgInfo { font: 500 0.82rem var(--f-data); color: var(--ink); font-variant-numeric: tabular-nums; }
+.chip.dbg-ok b { color: var(--g-best); }
+.chip.dbg-warn b { color: var(--accent); }
 .howto { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px; }
 .howto h2 { font: 700 1.2rem var(--f-display); margin: 0 0 6px; letter-spacing: 0.02em; }
 .howto ol { margin: 0; padding-left: 1.3em; display: grid; gap: 6px; max-width: 70ch; }
@@ -278,6 +283,7 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
           </optgroup>
         </select>
         <span class="chip" id="modeChip"><span class="swatch" id="modeSwatch"></span><span id="modeText">–</span></span>
+        <span class="chip" id="dbgChip" hidden></span>
       </div>
       <div class="viewer-wrap">
         <canvas id="view" aria-label="Oppretta bilde av blinken med markerte hull"></canvas>
@@ -368,6 +374,12 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
         </div>
         <p>Grenser for spredning senter–senter med 5 skudd, i cm/100m. Grupper med et annet antall skudd regnes om til 5 skudd før de vurderes. Standardverdiene er TRG-nivået (1,5), forventet nivå for Sako 90 Quest med TRG-ammo (2,5) og Sakos sub-MOA-garanti (2,9).</p>
         <p><button class="btn" id="refReset" type="button">Tilbakestill til standard</button></p>
+      </details>
+      <details class="cal-box" id="dbgBox" hidden>
+        <summary>Testbilder for feilsøking</summary>
+        <label class="dbg-row"><input type="checkbox" id="dbgOn" checked> Lagre bildene jeg analyserer</label>
+        <p id="dbgInfo">–</p>
+        <p>Originalbildet lagres privat i Blinkanalyse, sammen med hjørnene og hullene appen fant, rettelsene dine og innstillingene. Når noe blir feil, kan du be Claude hente testbildene og bruke dem til å forbedre gjenkjenningen. Eksempelbildet lagres ikke.</p>
       </details>
     </aside>
   </main>
@@ -1008,7 +1020,8 @@ async function loadFile(file) {
     const k = Math.min(1, 3200 / Math.max(img.naturalWidth, img.naturalHeight));
     const c = document.createElement("canvas"); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
     const ctx = c.getContext("2d", { willReadFrequently: true }); ctx.imageSmoothingQuality = "high"; ctx.drawImage(img, 0, 0, c.width, c.height);
-    return sourceFromCanvas(c);
+    const s = sourceFromCanvas(c); s.origW = img.naturalWidth; s.origH = img.naturalHeight;
+    return s;
   } finally { URL.revokeObjectURL(url); }
 }
 
@@ -1477,6 +1490,7 @@ function updateReadout() {
   const d = state.dist, k = 100 / d, load = isMulti();
   $("roTitle").textContent = load ? "Ladninger" : "Korreksjon";
   $("roLoad").hidden = !load; $("roSingle").hidden = load;
+  dbgTouch();
   if (load) { $("roSub").textContent = `${SHEETS[state.sheet].label} · ${fmt(d, 0)} m · ${state.holes.length} hull på arket`; updateLoadTable(); viewer.req(); return; }
   const st = computeStats(state.holes, state.cal);
   $("roSub").textContent = `${fmt(d, 0)} m · 1 klikk = 0,1 mrad = ${fmt(d / 100, 1)} cm på blinken`;
@@ -1547,6 +1561,7 @@ function redetect() {
   state.det = res;
   const auto = res.holes.filter(a => !manual.some(m => Math.hypot(m.x - a.x, m.y - a.y) < 3)).map(h => ({ ...h, src: "auto" }));
   state.holes = manual.concat(auto); state.selected = -1;
+  dbgRun(res);
   updateDeleteBtn(); updateModeChip(); updateReadout();
   const n = state.holes.length, load = isMulti(), nr0 = load ? SHEETS[state.sheet].offset : 0;
   const off = load && state.shots ? loadRows().map((st, i) => ({ i, n: st.n })).filter(r => r.n && r.n !== state.shots) : [];
@@ -1577,8 +1592,10 @@ async function changeSheet(sheet) {
 }
 async function processSource(src, isSample) {
   state.src = src; state.backingManual = null; state.pick = false; state.holes = []; state.selected = -1; markSample(isSample);
+  if (isSample) dbgStop();
   setBusy("Finner hjørnemerkene…"); await frame();
   const m = findMarkers(src);
+  if (!isSample && DBG.cur) DBG.cur.autoMarkers = m ? { pts: ptsOut(m.pts), sheet: m.sheet, refs: m.refs, ok: m.ok } : null;
   if (!m) { state.markers = null; setBusy(null); enterMarkers("Fant ikke alle fire hjørnemerkene. Dra merkene på plass, eller ta et nytt bilde med hele arket i bildet."); return; }
   state.markers = m.pts; state.refs = m.refs; state.sheetAuto = true; setSheet(m.sheet);
   if (!m.ok) { setBusy(null); enterMarkers(m.refs === 0 ? "Fant ikke REF-merket. Kontroller at merket med hvitt hull er øverst til venstre." : "Kontroller at hjørnemerkene sitter riktig."); return; }
@@ -1774,7 +1791,7 @@ for (const id of ["fileCam", "fileLib"]) $(id).addEventListener("change", () => 
 async function takeImageFile(f) {
   if (!f || !/^image\//.test(f.type || "image/")) { setStatus("Det er ikke et bilde. Prøv et JPEG- eller PNG-bilde.", true); return; }
   setBusy("Leser bildet…"); setStatus("");
-  try { const src = await loadFile(f); await processSource(src, false); $("pickNotice").hidden = true; }
+  try { const src = await loadFile(f); dbgStart(f, src); await processSource(src, false); $("pickNotice").hidden = true; }
   catch (err) { setBusy(null); setStatus("Kunne ikke lese bildet. Prøv igjen, eller velg et JPEG- eller PNG-bilde.", true); console.error(err); }
 }
 function imageFromClipboard(e) {
@@ -1889,6 +1906,122 @@ if (!IN_CLAUDE) {
 function showSnap() { $("bSnap").setAttribute("aria-pressed", state.snap); $("bSnap").classList.toggle("btn-primary", false); $("bSnapTxt").textContent = state.snap ? "Finjuster: på" : "Finjuster: av"; }
 state.snap = store.get("snap", true); showSnap();
 $("bSnap").addEventListener("click", () => { state.snap = !state.snap; store.set("snap", state.snap); showSnap(); setStatus(state.snap ? "Hull du plasserer eller flytter, finjusteres til sentrum av hullet." : "Finjustering er av. Hullene blir stående der du plasserer dem."); });
+
+/* ---------------- test images for troubleshooting (Claude version only) ---------------- */
+// Every photo you analyse is stored privately with the artifact: the original image as an asset, and one record in
+// db collection "testbilder" with what the app found, your corrections and the settings. Claude can read both back.
+const APP_VERSION = "2026-11-01";
+const DBG = { assets: null, db: null, on: true, cur: null, count: 0, bytes: 0, maxBytes: 0, dead: false };
+const r3 = v => Math.round(v * 1000) / 1000;
+const ptsOut = a => (a || []).map(p => [r3(p.x), r3(p.y)]);
+function dbgId() {
+  const d = new Date(), z = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}-${Math.random().toString(36).slice(2, 6)}`;
+}
+function setDbgChip(text, kind) {
+  const c = $("dbgChip"); c.hidden = !text; if (!text) return;
+  c.className = "chip" + (kind ? " dbg-" + kind : ""); c.innerHTML = `<b>●</b> ${text}`;
+}
+function showDbgInfo() {
+  const mb = b => (b / 1048576).toLocaleString("nb-NO", { maximumFractionDigits: b < 10485760 ? 1 : 0 });
+  $("dbgInfo").textContent = `${DBG.count} ${DBG.count === 1 ? "bilde" : "bilder"} lagret` + (DBG.maxBytes ? ` · ${mb(DBG.bytes)} av ${mb(DBG.maxBytes)} MB brukt` : "");
+}
+async function originalBlob(file) {
+  if (["image/jpeg", "image/png", "image/webp"].includes(file.type) && file.size <= 20 * 1048576) return { blob: file, type: file.type, reencoded: false };
+  // other formats or over 20 MB: re-encode as JPEG at full size
+  let bmp = null; try { bmp = await createImageBitmap(file); } catch (_) {}
+  const src = bmp || state.src.canvas, w = bmp ? bmp.width : state.src.w, h = bmp ? bmp.height : state.src.h;
+  const k = Math.min(1, 8000 / Math.max(w, h)), c = document.createElement("canvas");
+  c.width = Math.round(w * k); c.height = Math.round(h * k); c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
+  for (const q of [0.92, 0.85, 0.75]) { const b = await new Promise(r => c.toBlob(r, "image/jpeg", q)); if (b && b.size <= 20 * 1048576) return { blob: b, type: "image/jpeg", reencoded: true }; }
+  throw { code: "too_large" };
+}
+function dbgStop() { if (DBG.cur) { clearTimeout(DBG.cur.timer); dbgSave(DBG.cur); } DBG.cur = null; setDbgChip(null); }
+function dbgStart(file, src) {
+  if (DBG.cur) { clearTimeout(DBG.cur.timer); dbgSave(DBG.cur); }        // the record is snapshotted now, before the state changes
+  DBG.cur = null;
+  if (!DBG.assets || !DBG.db || !DBG.on || DBG.dead || !file) { setDbgChip(null); return; }
+  const cur = { id: dbgId(), name: file.name || "", createdAt: new Date().toISOString(), srcW: src.w, srcH: src.h, origW: src.origW || src.w, origH: src.origH || src.h,
+    autoMarkers: null, runs: [], image: null, imageErr: null, last: "", saving: false, again: false, timer: 0, saved: false };
+  DBG.cur = cur; setDbgChip("Lagrer testbilde…");
+  cur.upload = originalBlob(file)
+    .then(o => DBG.assets.upload(o.blob, { type: o.type }).then(r => { cur.image = { assetId: r.id, contentType: r.contentType, sizeBytes: r.sizeBytes, name: cur.name, reencoded: o.reencoded }; DBG.bytes += r.sizeBytes; }))
+    .catch(e => { cur.imageErr = (e && e.code) || "upstream_error"; });
+}
+function dbgRun(res) {
+  const cur = DBG.cur; if (!cur || state.sample) return;
+  cur.runs.push({ at: new Date().toISOString(), sheet: state.sheet, markers: ptsOut(state.markers), mode: res.mode,
+    backing: res.backing ? { h: r3(res.backing.h), s: r3(res.backing.s), v: r3(res.backing.v), auto: !!res.backing.auto } : null,
+    shots: state.shots, merged: !!res.merged, holes: state.holes.filter(h => h.src === "auto").map(h => [r3(h.x), r3(h.y)]) });
+  if (cur.runs.length > 8) cur.runs.splice(1, 1);                         // keep the first run and the latest ones
+}
+function dbgRecord(cur) {
+  const sh = SHEETS[state.sheet], last = cur.runs[cur.runs.length - 1];
+  const removedAuto = last ? last.holes.filter(a => !state.holes.some(h => Math.hypot(h.x - a[0], h.y - a[1]) < 0.5)) : [];
+  const res = st => ({ n: st.n, es: r3(st.es || 0), mr: r3(st.mr || 0), ring: r3(st.ringD || 0), mx: r3(st.mx || 0), my: r3(st.my || 0) });
+  let results;
+  if (sh.multi) results = loadRows().map((st, i) => ({ nr: sh.offset + i + 1, ...res(st) })).filter(r => r.n);
+  else { const st = computeStats(state.holes, state.cal); results = st.n ? [{ nr: 1, ...res(st) }] : []; }
+  const am = cur.autoMarkers && cur.autoMarkers.pts;
+  const markersEdited = !!(am && state.markers && state.markers.some((p, i) => Math.hypot(p.x - am[i][0], p.y - am[i][1]) > 1));
+  return {
+    v: 1, id: cur.id, createdAt: cur.createdAt, app: APP_VERSION, ua: navigator.userAgent,
+    frame: { markers: "px in the analysed image (srcW x srcH = original scaled, EXIF rotation applied)", holes: "mm on the sheet, origin at page centre, x right, y up", results: "mm on the target",
+      srcW: cur.srcW, srcH: cur.srcH, origW: cur.origW, origH: cur.origH },
+    auto: { markers: cur.autoMarkers, runs: cur.runs },
+    final: { sheet: state.sheet, sheetAuto: !!state.sheetAuto, paper: sh.paper, markers: ptsOut(state.markers), markersEdited,
+      mode: state.det ? state.det.mode : null, backingManual: !!state.backingManual,
+      holes: state.holes.map(h => ({ x: r3(h.x), y: r3(h.y), src: h.src })), removedAuto, view: state.view },
+    settings: { dist: state.dist, shots: state.shots, cal: state.cal, ref: state.ref, snap: state.snap,
+      loads: sh.multi ? state.loads.slice(sh.offset, sh.offset + sh.aims.length) : [] },
+    results
+  };
+}
+function dbgTouch() {
+  const cur = DBG.cur; if (!cur || !DBG.on) return;
+  clearTimeout(cur.timer); cur.timer = setTimeout(() => dbgSave(cur), 2000);
+}
+async function dbgSave(cur) {
+  if (!cur || DBG.dead) return;
+  if (cur.saving) { cur.again = true; return; }                         // one write at a time per record
+  const rec = dbgRecord(cur);                                             // snapshot of the state right now
+  cur.saving = true;
+  try {
+    await cur.upload;
+    rec.image = cur.image; rec.imageError = cur.imageErr;
+    const json = JSON.stringify(rec);
+    if (json === cur.last) return;
+    await DBG.db.collection("testbilder").doc(cur.id).set({ ...rec, updatedAt: new Date().toISOString() });
+    cur.last = json;
+    if (!cur.saved) { cur.saved = true; DBG.count++; showDbgInfo(); }
+    if (DBG.cur === cur) setDbgChip(cur.imageErr ? "Analysen er lagret, men ikke bildet" : "Testbilde lagret", cur.imageErr ? "warn" : "ok");
+  } catch (e) {
+    const code = e && e.code;
+    if (code === "revoked" || code === "not_granted" || code === "capability_disabled") { DBG.dead = true; setDbgChip(null); $("dbgBox").hidden = true; return; }
+    if (DBG.cur === cur) setDbgChip(code === "quota_exceeded" ? "Ikke lagret: lagringsplassen er full" : "Testbildet ble ikke lagret", "warn");
+  } finally {
+    cur.saving = false;
+    if (cur.again) { cur.again = false; dbgTouch(); }
+  }
+}
+function flushDbg() { const cur = DBG.cur; if (cur) { clearTimeout(cur.timer); dbgSave(cur); } }
+window.addEventListener("pagehide", flushDbg);
+document.addEventListener("visibilitychange", () => { if (document.hidden) flushDbg(); });
+DBG.on = store.get("dbgOn", true); $("dbgOn").checked = DBG.on;
+$("dbgOn").addEventListener("change", e => {
+  DBG.on = e.target.checked; store.set("dbgOn", DBG.on);
+  if (!DBG.on) { flushDbg(); DBG.cur = null; setDbgChip(null); setStatus("Nye bilder lagres ikke lenger for feilsøking."); }
+  else setStatus("Bilder du analyserer fra nå, lagres for feilsøking.");
+});
+if (IN_CLAUDE) {
+  Promise.all([window.claude.use("assets"), window.claude.use("db")]).then(async ([a, d]) => {
+    if (!a || !d) return;
+    DBG.assets = a; DBG.db = d; $("dbgBox").hidden = false; showDbgInfo();
+    try { const snap = await d.collection("testbilder").limit(1000).get(); DBG.count = snap.size; } catch (_) {}
+    try { const l = await a.list(); DBG.bytes = l.usage.bytes; DBG.maxBytes = l.usage.maxBytes; } catch (_) {}
+    showDbgInfo();
+  }).catch(() => {});
+}
 
 /* ---------------- wiring ---------------- */
 $("view").addEventListener("pointerdown", () => { if (!state.pick && state.view === "holes") setHint(null); });
