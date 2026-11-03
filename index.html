@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Blinkanalyse">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="app-version" content="eb509d53">
+<meta name="app-version" content="064f1354">
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -207,10 +207,6 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
 .print-item .pi-msg.warn { color: var(--accent); }
 .print-tips { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; font-size: 0.84rem; color: var(--ink); max-width: 70ch; }
 .modal-box.wide { width: min(860px, 100%); }
-.gh-btns { margin-top: 10px; }
-#ghSetup .ref-grid { grid-template-columns: minmax(0, 1fr); }
-#ghSetup .field { display: flex; width: 100%; }
-#ghSetup .field input { flex: 1 1 auto; min-width: 0; width: auto; text-align: left; font: 500 0.9rem var(--f-body); }
 .dbg-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 0.88rem; cursor: pointer; }
 .dbg-row input { width: 18px; height: 18px; accent-color: var(--accent); }
 #dbgInfo { font: 500 0.84rem var(--f-body); color: var(--ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
@@ -382,13 +378,6 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
       <details class="cal-box" id="dbgBox" hidden>
         <summary>Testbilder for feilsøking</summary>
         <label class="dbg-row"><input type="checkbox" id="dbgOn" checked> Lagre bildene jeg analyserer</label>
-        <div id="ghSetup" hidden>
-          <div class="ref-grid">
-            <div class="field ref-name"><label for="ghRepo">Repo</label><input id="ghRepo" type="text" value="magnusrt/blinkanalyse-testbilder" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
-            <div class="field ref-name"><label for="ghToken">Nøkkel</label><input id="ghToken" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_…"></div>
-          </div>
-          <div class="notice-row gh-btns"><button class="btn btn-primary" id="ghConnect" type="button">Koble til</button><button class="btn" id="ghForget" type="button" hidden>Fjern nøkkel</button></div>
-        </div>
         <p id="dbgInfo">–</p>
         <p id="dbgNote">Originalbildet lagres privat i Blinkanalyse, sammen med hjørnene og hullene appen fant, rettelsene dine og innstillingene. Når noe blir feil, kan du be Claude hente testbildene og bruke dem til å forbedre gjenkjenningen. Eksempelbildet lagres ikke.</p>
       </details>
@@ -1921,9 +1910,10 @@ $("bSnap").addEventListener("click", () => { state.snap = !state.snap; store.set
 /* ---------------- test images for troubleshooting ---------------- */
 // Every photo you analyse is stored with what the app found, your corrections and the settings.
 // Claude version: the original as an artifact asset + one record in db collection "testbilder".
-// GitHub app: bilder/<YYYY-MM>/<id>.jpg + <id>.json in a private repo, via a token stored only on this device.
-// The GitHub app keeps an outbox in IndexedDB, so photos taken without network are sent later.
-const APP_VERSION = "2026-11-01b";
+// Web app (GitHub Pages): sent to a Google Apps Script receiver that saves <id>.jpg + <id>.json in the owner's
+// Google Drive folder «Blinkanalyse testbilder/<YYYY-MM>». No setup on the phone. An IndexedDB outbox keeps
+// photos taken without network until they can be sent.
+const APP_VERSION = "2026-11-03";
 const DBG = { backend: null, on: true, cur: null, count: 0, bytes: 0, maxBytes: 0, dead: false, queued: 0 };
 const r3 = v => Math.round(v * 1000) / 1000;
 const ptsOut = a => (a || []).map(p => [r3(p.x), r3(p.y)]);
@@ -1938,10 +1928,10 @@ function setDbgChip(text, kind) {
 function showDbgInfo() {
   const mb = b => (b / 1048576).toLocaleString("nb-NO", { maximumFractionDigits: b < 10485760 ? 1 : 0 });
   const b = DBG.backend, el = $("dbgInfo");
-  if (!IN_CLAUDE && !b) { el.textContent = "Ikke koblet til. Lim inn nøkkelen og trykk «Koble til»."; return; }
+  if (!IN_CLAUDE && !b) { el.textContent = "Lagring er ikke satt opp i denne versjonen."; return; }
   if (!b) return;
   const n = `${DBG.count} ${DBG.count === 1 ? "bilde" : "bilder"} lagret`;
-  if (b.kind === "github") el.textContent = `Koblet til ${b.repo} · ${n} fra denne enheten` + (DBG.queued ? ` · ${DBG.queued} venter på nett` : "");
+  if (b.kind === "drive") el.textContent = `${n} fra denne enheten` + (DBG.queued ? ` · ${DBG.queued} venter på nett` : "");
   else el.textContent = n + (DBG.maxBytes ? ` · ${mb(DBG.bytes)} av ${mb(DBG.maxBytes)} MB brukt` : "");
 }
 async function originalBlob(file) {
@@ -1976,7 +1966,10 @@ function claudeBackend(assets, db) {
   };
 }
 
-/* --- GitHub backend with an IndexedDB outbox --- */
+/* --- Web app backend: Google Drive receiver (Apps Script), with an IndexedDB outbox --- */
+// The receiver URL is public in this code; the key only keeps random traffic out, it is not a secret.
+const DRIVE_URL = "";
+const DRIVE_KEY = "ba308-k7q2m9x4";
 const OB = {
   db: null,
   open() {
@@ -1994,52 +1987,30 @@ const OB = {
   del(id) { return this.tx("readwrite", st => st.delete(id)); }
 };
 const blobB64 = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1] || ""); r.onerror = () => rej(r.error); r.readAsDataURL(b); });
-async function ghApi(token, method, url, body) {
+async function drivePost(body) {
   let r;
   try {
-    r = await fetch("https://api.github.com/" + url, { method, cache: "no-store",
-      headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", ...(body ? { "Content-Type": "application/json" } : {}) },
-      body: body ? JSON.stringify(body) : undefined });
+    r = await fetch(DRIVE_URL, { method: "POST", redirect: "follow", cache: "no-store",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },           // a simple request: no preflight, which Apps Script cannot answer
+      body: JSON.stringify({ key: DRIVE_KEY, ...body }) });
   } catch (_) { throw { code: "offline" }; }
-  let data = null; try { data = await r.json(); } catch (_) {}
-  if (!r.ok) throw { code: "http", status: r.status, message: data && data.message };
-  return data;
+  let d = null; try { d = await r.json(); } catch (_) {}
+  if (!r.ok || !d || !d.ok) throw { code: "server", message: (d && d.error) || ("HTTP " + r.status) };
+  return d;
 }
-async function ghCheck(repo, token) {
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw { code: "repo_name" };
-  const info = await ghApi(token, "GET", "repos/" + repo);
-  if (!info.private) throw { code: "public" };
-  if (info.permissions && info.permissions.push === false) throw { code: "readonly" };
-  return info;
-}
-function ghErrorText(e) {
-  if (!e) return "Noe gikk galt. Prøv igjen.";
-  if (e.code === "offline") return "Fikk ikke kontakt med GitHub. Sjekk nettet og prøv igjen.";
-  if (e.code === "repo_name") return "Skriv repoet som eier/navn, for eksempel magnusrt/blinkanalyse-testbilder.";
-  if (e.code === "public") return "Repoet er offentlig. Gjør det privat først, ellers blir bildene synlige for alle.";
-  if (e.code === "readonly") return "Nøkkelen kan ikke skrive til repoet. Gi den «Contents: Read and write».";
-  if (e.status === 401) return "Nøkkelen er ugyldig eller utløpt. Lag en ny og lim den inn.";
-  if (e.status === 403 || e.status === 404) return "Fant ikke repoet, eller nøkkelen har ikke tilgang til det.";
-  return "GitHub svarte med en feil" + (e.status ? ` (${e.status})` : "") + ". Prøv igjen senere.";
-}
-function githubBackend(repo, token) {
-  const base = `repos/${repo}/contents/`, shas = {};
-  const put = (path, content, message, sha) => ghApi(token, "PUT", base + path, { message, content, ...(sha ? { sha } : {}) });
-  const shaOf = async path => { try { return (await ghApi(token, "GET", base + path)).sha; } catch (e) { if (e.status === 404) return null; throw e; } };
+function driveBackend() {
   let chain = Promise.resolve();
   const be = {
-    kind: "github", repo,
+    kind: "drive",
     start(cur, file) {
       cur.upload = originalBlob(file).then(o => {
-        const ym = cur.id.slice(0, 4) + "-" + cur.id.slice(4, 6), ext = o.type === "image/png" ? "png" : o.type === "image/webp" ? "webp" : "jpg";
-        cur.gh = { dir: `bilder/${ym}/`, ext };
-        cur.image = { path: `${cur.gh.dir}${cur.id}.${ext}`, contentType: o.type, sizeBytes: o.blob.size, name: cur.name, reencoded: o.reencoded };
-        return OB.put({ id: cur.id, dir: cur.gh.dir, blob: o.blob, ext, image: cur.image, imageDone: false, rec: null, recDirty: false });
+        cur.image = { file: `${cur.id}.${o.type === "image/png" ? "png" : o.type === "image/webp" ? "webp" : "jpg"}`, contentType: o.type, sizeBytes: o.blob.size, name: cur.name, reencoded: o.reencoded };
+        return OB.put({ id: cur.id, blob: o.blob, image: cur.image, imageDone: false, rec: null, recDirty: false });
       }).catch(e => { cur.imageErr = (e && e.code) || "encode_failed"; });
     },
     async save(cur, rec) {
       await cur.upload;
-      const item = (await OB.get(cur.id)) || { id: cur.id, dir: cur.gh ? cur.gh.dir : `bilder/${cur.id.slice(0, 4)}-${cur.id.slice(4, 6)}/`, blob: null, imageDone: true, image: cur.image || null };
+      const item = (await OB.get(cur.id)) || { id: cur.id, blob: null, imageDone: true, image: cur.image || null };
       rec.image = item.image; rec.imageError = cur.imageErr;
       const json = JSON.stringify(rec);
       if (json === cur.last && !item.recDirty) return "same";
@@ -2051,40 +2022,32 @@ function githubBackend(repo, token) {
     flush(focusId) { const p = chain.then(() => run(focusId)); chain = p.catch(() => {}); return p; }
   };
   async function run(focusId) {
-      let state = "saved";
-      try {
-          for (const item of await OB.all()) {
-            try {
-              if (!item.imageDone && item.blob) {
-                let fresh = true;
-                try { await put(item.image.path, await blobB64(item.blob), `Testbilde ${item.id}`); }
-                catch (e) { if (e.status !== 422) throw e; fresh = false; }  // already there from an earlier attempt
-                item.imageDone = true; item.blob = null; await OB.put(item);
-                if (fresh) { DBG.count++; store.set("ghCount", DBG.count); }
-              }
-              if (item.recDirty && item.rec) {
-                const path = `${item.dir}${item.id}.json`, content = await blobB64(new Blob([JSON.stringify(item.rec, null, 1)], { type: "application/json" }));
-                let sha = shas[item.id];
-                try { const r = await put(path, content, `Analyse ${item.id}`, sha); shas[item.id] = r.content.sha; }
-                catch (e) {
-                  if (e.status !== 409 && e.status !== 422) throw e;
-                  sha = await shaOf(path); const r = await put(path, content, `Analyse ${item.id}`, sha || undefined); shas[item.id] = r.content.sha;
-                }
-                await OB.del(item.id);
-              }
-            } catch (e) {
-              if (item.id === focusId) state = e.code === "offline" ? "queued" : "error:" + ghErrorText(e);
-              if (e.code === "offline") break;
-            }
-          }
-      } finally {
+    let state = "saved";
+    try {
+      for (const item of await OB.all()) {
         try {
-          const left = await OB.all(); DBG.queued = left.length;
-          if (focusId && state === "saved" && left.some(i => i.id === focusId)) state = "queued";
-        } catch (_) {}
-        showDbgInfo();
+          if (!item.imageDone && item.blob) {
+            const r = await drivePost({ kind: "image", id: item.id, contentType: item.image.contentType, data: await blobB64(item.blob) });
+            item.imageDone = true; item.blob = null; await OB.put(item);
+            if (!r.existed) { DBG.count++; store.set("driveCount", DBG.count); }
+          }
+          if (item.recDirty && item.rec) {
+            await drivePost({ kind: "record", id: item.id, record: item.rec });
+            await OB.del(item.id);
+          }
+        } catch (e) {
+          if (item.id === focusId) state = e.code === "offline" ? "queued" : "error:Mottakeren svarte med en feil, så bildet ligger i kø og prøves igjen senere.";
+          if (e.code === "offline") break;
+        }
       }
-      return state;
+    } finally {
+      try {
+        const left = await OB.all(); DBG.queued = left.length;
+        if (focusId && state === "saved" && left.some(i => i.id === focusId)) state = "queued";
+      } catch (_) {}
+      showDbgInfo();
+    }
+    return state;
   }
   return be;
 }
@@ -2099,6 +2062,10 @@ function dbgStart(file, src) {
     autoMarkers: null, runs: [], image: null, imageErr: null, last: "", saving: false, again: false, timer: 0, saved: false, backend: DBG.backend };
   DBG.cur = cur; setDbgChip("Lagrer testbilde…");
   cur.backend.start(cur, file);
+  if (cur.backend.kind === "drive" && !store.get("driveTold", false)) {
+    store.set("driveTold", true);
+    setTimeout(() => setStatus("Bildet lagres for å forbedre gjenkjenningen. Du kan slå det av under «Testbilder for feilsøking» nederst."), 1500);
+  }
 }
 function dbgRun(res) {
   const cur = DBG.cur; if (!cur || state.sample) return;
@@ -2117,7 +2084,7 @@ function dbgRecord(cur) {
   const am = cur.autoMarkers && cur.autoMarkers.pts;
   const markersEdited = !!(am && state.markers && state.markers.some((p, i) => Math.hypot(p.x - am[i][0], p.y - am[i][1]) > 1));
   return {
-    v: 1, id: cur.id, source: cur.backend.kind === "github" ? "github-app" : "claude", createdAt: cur.createdAt, app: APP_VERSION, ua: navigator.userAgent,
+    v: 1, id: cur.id, source: cur.backend.kind === "drive" ? "web-app" : "claude", createdAt: cur.createdAt, app: APP_VERSION, ua: navigator.userAgent,
     frame: { markers: "px in the analysed image (srcW x srcH = original scaled, EXIF rotation applied)", holes: "mm on the sheet, origin at page centre, x right, y up", results: "mm on the target",
       srcW: cur.srcW, srcH: cur.srcH, origW: cur.origW, origH: cur.origH },
     auto: { markers: cur.autoMarkers, runs: cur.runs },
@@ -2131,7 +2098,7 @@ function dbgRecord(cur) {
 }
 function dbgTouch() {
   const cur = DBG.cur; if (!cur || !DBG.on) return;
-  clearTimeout(cur.timer); cur.timer = setTimeout(() => dbgSave(cur), cur.backend.kind === "github" ? 4000 : 2000);
+  clearTimeout(cur.timer); cur.timer = setTimeout(() => dbgSave(cur), cur.backend.kind === "drive" ? 4000 : 2000);
 }
 async function dbgSave(cur) {
   if (!cur || DBG.dead) return;
@@ -2174,34 +2141,14 @@ if (IN_CLAUDE) {
     showDbgInfo();
   }).catch(() => {});
 } else {
-  // GitHub app: setup lives in the panel; the token stays in this browser only
-  $("dbgBox").hidden = false; $("ghSetup").hidden = false;
-  $("dbgNote").textContent = "Originalbildet lagres i et privat GitHub-repo, sammen med hjørnene og hullene appen fant, rettelsene dine og innstillingene. Nøkkelen lagres bare på denne enheten. Bilder tatt uten nett sendes når du har nett igjen. Eksempelbildet lagres ikke.";
-  const repo0 = store.get("ghRepo", "magnusrt/blinkanalyse-testbilder"), tok0 = store.get("ghToken", "");
-  $("ghRepo").value = repo0; DBG.count = store.get("ghCount", 0);
-  const connected = (repo, token) => {
-    DBG.backend = githubBackend(repo, token);
-    $("ghToken").value = ""; $("ghToken").placeholder = "Nøkkel lagret på denne enheten"; $("ghForget").hidden = false; $("ghConnect").textContent = "Bytt nøkkel";
-    showDbgInfo(); DBG.backend.flush();
-  };
-  if (tok0) connected(repo0, tok0); else showDbgInfo();
-  $("ghConnect").addEventListener("click", async () => {
-    const repo = $("ghRepo").value.trim(), token = $("ghToken").value.trim() || store.get("ghToken", "");
-    if (!token) { setStatus("Lim inn nøkkelen fra GitHub først.", true); $("ghToken").focus(); return; }
-    $("ghConnect").disabled = true; $("dbgInfo").textContent = "Kobler til…";
-    try {
-      await ghCheck(repo, token);
-      store.set("ghRepo", repo); store.set("ghToken", token);
-      connected(repo, token); setStatus(`Koblet til ${repo}. Bilder du analyserer, lagres der.`);
-    } catch (e) { showDbgInfo(); $("dbgInfo").textContent = ghErrorText(e); }
-    finally { $("ghConnect").disabled = false; }
-  });
-  $("ghForget").addEventListener("click", () => {
-    try { localStorage.removeItem("blinkanalyse.ghToken"); } catch (_) {} DBG.backend = null; DBG.cur = null; setDbgChip(null);
-    $("ghForget").hidden = true; $("ghConnect").textContent = "Koble til"; $("ghToken").placeholder = "github_pat_…";
-    showDbgInfo(); setStatus("Nøkkelen er fjernet fra denne enheten.");
-  });
-  window.addEventListener("online", () => { if (DBG.backend) DBG.backend.flush().then(() => { if (DBG.cur && !DBG.queued && $("dbgChip").textContent.includes("nett")) setDbgChip("Testbilde lagret", "ok"); }); });
+  // Web app: no setup on the phone. Everyone's photos are sent to the receiver unless they turn it off.
+  $("dbgBox").hidden = false;
+  $("dbgNote").textContent = "Bilder du analyserer, lagres sammen med hjørnene og hullene appen fant, rettelsene dine og innstillingene, slik at gjenkjenningen kan forbedres. Bilder tatt uten nett sendes når du har nett igjen. Eksempelbildet lagres ikke.";
+  DBG.count = store.get("driveCount", 0);
+  if (DRIVE_URL) {
+    DBG.backend = driveBackend(); showDbgInfo(); DBG.backend.flush();
+    window.addEventListener("online", () => { if (DBG.backend) DBG.backend.flush().then(() => { if (DBG.cur && !DBG.queued && $("dbgChip").textContent.includes("nett")) setDbgChip("Testbilde lagret", "ok"); }); });
+  } else showDbgInfo();
 }
 
 /* ---------------- wiring ---------------- */
