@@ -24,6 +24,7 @@
  *
  * KEY under må være lik DRIVE_KEY i appen. Den holder bare tilfeldig trafikk ute; den er ikke hemmelig.
  */
+const VERSION = 3;                 // vises når du åpner adressen i nettleseren
 const KEY = "ba308-k7q2m9x4";
 const ROOT_NAME = "Blinkanalyse testbilder";
 const NO_DEVICE = "Uten enhet";
@@ -36,7 +37,7 @@ const TYPES = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
 const ROLES = ["tolkning", "justert"];
 
 function doGet() {
-  return reply({ ok: true, service: "blinkanalyse-testbilder" });
+  return reply({ ok: true, service: "blinkanalyse-testbilder", versjon: VERSION });
 }
 
 function doPost(e) {

@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Blinkanalyse">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="app-version" content="cd3db717">
+<meta name="app-version" content="5671bf24">
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -1985,7 +1985,7 @@ const canvasJpeg = cv => new Promise((res, rej) => cv.toBlob(b => b ? res(b) : r
 // Web app (GitHub Pages): sent to a Google Apps Script receiver that saves <id>.jpg + <id>.json in the owner's
 // Google Drive folder «Blinkanalyse testbilder/<YYYY-MM>». No setup on the phone. An IndexedDB outbox keeps
 // photos taken without network until they can be sent.
-const APP_VERSION = "2026-11-04";
+const APP_VERSION = "2026-11-04b";
 const DBG = { backend: null, on: true, cur: null, count: 0, bytes: 0, maxBytes: 0, dead: false, queued: 0 };
 const r3 = v => Math.round(v * 1000) / 1000;
 const ptsOut = a => (a || []).map(p => [r3(p.x), r3(p.y)]);
@@ -2004,7 +2004,7 @@ function showDbgInfo() {
   if (!b) return;
   const n = `${DBG.count} ${DBG.count === 1 ? "bilde" : "bilder"} lagret`;
   showDevInfo();
-  if (b.kind === "drive") el.textContent = `${n} fra denne enheten` + (DBG.queued ? ` · ${DBG.queued} venter på nett` : "") + (DBG.receiverOld ? ". Mottakeren må oppdateres for å lagre tolkning og justert bilde." : "");
+  if (b.kind === "drive") el.textContent = `${n} fra denne enheten` + (DBG.queued ? ` · ${DBG.queued} venter på nett` : "") + (DBG.receiverOld ? `. Mottakeren i Google Drive må oppdateres for å lagre tolkning og justert bilde${DBG.waitReceiver ? ` (${DBG.waitReceiver} ${DBG.waitReceiver === 1 ? "bilde venter" : "bilder venter"})` : ""}.` : "");
   else el.textContent = n + (DBG.maxBytes ? ` · ${mb(DBG.bytes)} av ${mb(DBG.maxBytes)} MB brukt` : "");
 }
 function showDevInfo() {
@@ -2082,6 +2082,7 @@ async function drivePost(body) {
   if (!r.ok || !d || !d.ok) throw { code: "server", message: (d && d.error) || ("HTTP " + r.status) };
   return d;
 }
+const hasRenders = item => !!(item.renders && (item.renders.tolkning || item.renders.justert));
 function driveBackend() {
   let chain = Promise.resolve();
   const be = {
@@ -2125,14 +2126,12 @@ function driveBackend() {
             item.recDirty = false; await OB.put(item);
           }
           for (const role of ["tolkning", "justert"]) {
-            const blob = item.renders && item.renders[role]; if (!blob) continue;
-            if (!DBG.receiverOld) {
-              try { await drivePost({ kind: "render", id: item.id, role, contentType: "image/jpeg", data: await blobB64(blob) }); }
-              catch (e) { if (e.code !== "server" || e.message !== "kind") throw e; DBG.receiverOld = true; showDbgInfo(); }   // receiver predates renders
-            }
+            const blob = item.renders && item.renders[role]; if (!blob || DBG.receiverOld) continue;
+            try { await drivePost({ kind: "render", id: item.id, role, contentType: "image/jpeg", data: await blobB64(blob) }); }
+            catch (e) { if (e.code !== "server" || e.message !== "kind") throw e; DBG.receiverOld = true; continue; }   // receiver predates renders: keep them until it is updated
             delete item.renders[role]; await OB.put(item);
           }
-          if (item.imageDone && !item.recDirty) await OB.del(item.id);
+          if (item.imageDone && !item.recDirty && !hasRenders(item)) await OB.del(item.id);
         } catch (e) {
           if (item.id === focusId) state = e.code === "offline" ? "queued" : "error:Mottakeren svarte med en feil, så bildet ligger i kø og prøves igjen senere.";
           if (e.code === "offline") break;
@@ -2140,8 +2139,10 @@ function driveBackend() {
       }
     } finally {
       try {
-        const left = await OB.all(); DBG.queued = left.length;
-        if (focusId && state === "saved" && left.some(i => i.id === focusId)) state = "queued";
+        const left = await OB.all(), waitsForNet = i => !i.imageDone || i.recDirty || (hasRenders(i) && !DBG.receiverOld);
+        DBG.queued = left.filter(waitsForNet).length;
+        DBG.waitReceiver = DBG.receiverOld ? left.filter(i => !waitsForNet(i) && hasRenders(i)).length : 0;
+        if (focusId && state === "saved" && left.some(i => i.id === focusId && waitsForNet(i))) state = "queued";
       } catch (_) {}
       showDbgInfo();
     }
@@ -2212,7 +2213,8 @@ async function dbgSave(cur) {
     if (r === "same") return;
     if ((r === "saved" || r === "partial") && !cur.saved) { cur.saved = true; if (cur.backend.kind === "claude") DBG.count++; showDbgInfo(); }
     if (DBG.cur !== cur) return;
-    if (r === "saved") setDbgChip("Testbilde lagret", "ok");
+    if (r === "saved" && DBG.receiverOld) setDbgChip("Lagret, men mottakeren må oppdateres", "warn");
+    else if (r === "saved") setDbgChip("Testbilde lagret", "ok");
     else if (r === "partial") setDbgChip("Analysen er lagret, men ikke bildet", "warn");
     else if (r === "queued") setDbgChip("Testbildet sendes når du har nett", "warn");
     else if (typeof r === "string" && r.startsWith("error:")) { setDbgChip("Testbildet ble ikke lagret", "warn"); setStatus(r.slice(6), true); }
