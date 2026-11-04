@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Blinkanalyse">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="app-version" content="6dd9a242">
+<meta name="app-version" content="cd3db717">
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -209,6 +209,11 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
 .modal-box.wide { width: min(860px, 100%); }
 .dbg-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 0.88rem; cursor: pointer; }
 .dbg-row input { width: 18px; height: 18px; accent-color: var(--accent); }
+.dev-field { display: flex; margin-top: 12px; }
+.dev-field label { white-space: nowrap; }
+.dev-field input { flex: 1; min-width: 0; width: auto; text-align: left; font: 500 0.95rem var(--f-body); }
+.dev-field input::placeholder { color: var(--muted); opacity: 0.7; }
+#devInfo { margin-top: 6px; font-size: 0.8rem; color: var(--muted); overflow-wrap: anywhere; }
 #dbgInfo { font: 500 0.84rem var(--f-body); color: var(--ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .chip.dbg-ok b { color: var(--g-best); }
 .chip.dbg-warn b { color: var(--accent); }
@@ -378,6 +383,8 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
       <details class="cal-box" id="dbgBox" hidden>
         <summary>Testbilder for feilsøking</summary>
         <label class="dbg-row"><input type="checkbox" id="dbgOn" checked> Lagre bildene jeg analyserer</label>
+        <div class="field dev-field"><label for="devName">Navn på enheten</label><input id="devName" type="text" maxlength="40" autocomplete="off" enterkeyhint="done" placeholder="f.eks. Magnus iPhone"></div>
+        <p id="devInfo">–</p>
         <p id="dbgInfo">–</p>
         <p id="dbgNote">Originalbildet lagres privat i Blinkanalyse, sammen med hjørnene og hullene appen fant, rettelsene dine og innstillingene. Når noe blir feil, kan du be Claude hente testbildene og bruke dem til å forbedre gjenkjenningen. Eksempelbildet lagres ikke.</p>
       </details>
@@ -1923,6 +1930,22 @@ function showSnap() { $("bSnap").setAttribute("aria-pressed", state.snap); $("bS
 state.snap = store.get("snap", true); showSnap();
 $("bSnap").addEventListener("click", () => { state.snap = !state.snap; store.set("snap", state.snap); showSnap(); setStatus(state.snap ? "Hull du plasserer eller flytter, finjusteres til sentrum av hullet." : "Finjustering er av. Hullene blir stående der du plasserer dem."); });
 
+/* ---------------- this device: its own ID, and a name the user may give it ---------------- */
+// The ID is made once and kept in this browser (or installed app). Saved photos go in a folder per ID.
+const cleanDevName = s => String(s || "").replace(/[\u0000-\u001f/\\:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
+const DEVICE = (() => {
+  let d = store.get("device", null);
+  if (!d || !/^[a-z0-9]{6,12}$/.test(d.id || "")) {
+    const abc = "abcdefghijkmnpqrstuvwxyz23456789", a = new Uint8Array(6); crypto.getRandomValues(a);   // no l, o, 0, 1
+    d = { id: Array.from(a, b => abc[b % 32]).join(""), name: "", createdAt: new Date().toISOString() };
+    store.set("device", d);
+  }
+  d.name = cleanDevName(d.name);
+  return d;
+})();
+const deviceOut = () => ({ id: DEVICE.id, name: DEVICE.name });
+const deviceFolderName = () => `${DEVICE.name || "Enhet"} (${DEVICE.id})`;
+
 /* ---------------- images for troubleshooting: the app's interpretation and the corrected result ---------------- */
 // Draw with the state of one detection run (its corners, sheet and automatic holes), then restore the live state.
 function withRunState(run, fn) {
@@ -1980,8 +2003,14 @@ function showDbgInfo() {
   if (!IN_CLAUDE && !b) { el.textContent = "Lagring er ikke satt opp i denne versjonen."; return; }
   if (!b) return;
   const n = `${DBG.count} ${DBG.count === 1 ? "bilde" : "bilder"} lagret`;
+  showDevInfo();
   if (b.kind === "drive") el.textContent = `${n} fra denne enheten` + (DBG.queued ? ` · ${DBG.queued} venter på nett` : "") + (DBG.receiverOld ? ". Mottakeren må oppdateres for å lagre tolkning og justert bilde." : "");
   else el.textContent = n + (DBG.maxBytes ? ` · ${mb(DBG.bytes)} av ${mb(DBG.maxBytes)} MB brukt` : "");
+}
+function showDevInfo() {
+  $("devInfo").textContent = DBG.backend && DBG.backend.kind === "drive"
+    ? `ID for denne enheten: ${DEVICE.id}. Bildene lagres i mappen «${deviceFolderName()}».`
+    : `ID for denne enheten: ${DEVICE.id}. Navnet og ID-en lagres sammen med hvert bilde.`;
 }
 async function originalBlob(file) {
   if (["image/jpeg", "image/png", "image/webp"].includes(file.type) && file.size <= 20 * 1048576) return { blob: file, type: file.type, reencoded: false };
@@ -2047,7 +2076,7 @@ async function drivePost(body) {
   try {
     r = await fetch(DRIVE_URL, { method: "POST", redirect: "follow", cache: "no-store",
       headers: { "Content-Type": "text/plain;charset=utf-8" },           // a simple request: no preflight, which Apps Script cannot answer
-      body: JSON.stringify({ key: DRIVE_KEY, ...body }) });
+      body: JSON.stringify({ key: DRIVE_KEY, device: deviceOut(), ...body }) });
   } catch (_) { throw { code: "offline" }; }
   let d = null; try { d = await r.json(); } catch (_) {}
   if (!r.ok || !d || !d.ok) throw { code: "server", message: (d && d.error) || ("HTTP " + r.status) };
@@ -2153,7 +2182,7 @@ function dbgRecord(cur) {
   const am = cur.autoMarkers && cur.autoMarkers.pts;
   const markersEdited = !!(am && state.markers && state.markers.some((p, i) => Math.hypot(p.x - am[i][0], p.y - am[i][1]) > 1));
   return {
-    v: 1, id: cur.id, source: cur.backend.kind === "drive" ? "web-app" : "claude", createdAt: cur.createdAt, app: APP_VERSION, ua: navigator.userAgent,
+    v: 1, id: cur.id, source: cur.backend.kind === "drive" ? "web-app" : "claude", device: deviceOut(), createdAt: cur.createdAt, app: APP_VERSION, ua: navigator.userAgent,
     frame: { markers: "px in the analysed image (srcW x srcH = original scaled, EXIF rotation applied)", holes: "mm on the sheet, origin at page centre, x right, y up", results: "mm on the target",
       srcW: cur.srcW, srcH: cur.srcH, origW: cur.origW, origH: cur.origH },
     auto: { markers: cur.autoMarkers, runs: cur.runs },
@@ -2200,6 +2229,16 @@ function flushDbg() { const cur = DBG.cur; if (cur) { clearTimeout(cur.timer); d
 window.addEventListener("pagehide", flushDbg);
 document.addEventListener("visibilitychange", () => { if (document.hidden) flushDbg(); });
 DBG.on = store.get("dbgOn", true); $("dbgOn").checked = DBG.on;
+$("devName").value = DEVICE.name;
+$("devName").addEventListener("keydown", e => { if (e.key === "Enter") e.target.blur(); });
+$("devName").addEventListener("change", e => {
+  const name = cleanDevName(e.target.value); e.target.value = name;
+  if (name === DEVICE.name) return;
+  DEVICE.name = name; store.set("device", DEVICE); showDevInfo();
+  setStatus(name ? `Enheten heter nå «${name}».` : "Enheten har ikke lenger noe navn.");
+  if (DBG.backend && DBG.backend.kind === "drive") drivePost({ kind: "device" }).catch(() => {});   // renames the folder now; otherwise at the next save
+  if (DBG.cur) dbgTouch();
+});
 $("dbgOn").addEventListener("change", e => {
   DBG.on = e.target.checked; store.set("dbgOn", DBG.on);
   if (!DBG.on) { flushDbg(); DBG.cur = null; setDbgChip(null); setStatus("Nye bilder lagres ikke lenger for feilsøking."); }
@@ -2216,7 +2255,7 @@ if (IN_CLAUDE) {
 } else {
   // Web app: no setup on the phone. Everyone's photos are sent to the receiver unless they turn it off.
   $("dbgBox").hidden = false;
-  $("dbgNote").textContent = "Bilder du analyserer, lagres sammen med hjørnene og hullene appen fant, rettelsene dine og innstillingene, slik at gjenkjenningen kan forbedres. Bilder tatt uten nett sendes når du har nett igjen. Eksempelbildet lagres ikke.";
+  $("dbgNote").textContent = "Bilder du analyserer, lagres i en egen mappe for denne enheten, sammen med hjørnene og hullene appen fant, rettelsene dine og innstillingene, slik at gjenkjenningen kan forbedres. Bilder tatt uten nett sendes når du har nett igjen. Eksempelbildet lagres ikke.";
   DBG.count = store.get("driveCount", 0);
   if (DRIVE_URL) {
     DBG.backend = driveBackend(); showDbgInfo(); DBG.backend.flush();
