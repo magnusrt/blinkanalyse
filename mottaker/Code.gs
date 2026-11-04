@@ -4,6 +4,8 @@
  * Tar imot bilder og analyser fra Blinkanalyse-appen og lagrer dem i Google Drive-mappen
  * «Blinkanalyse testbilder», med én undermappe per måned:
  *   Blinkanalyse testbilder/2026-11/20261103-213712-ab12.jpg   (originalbildet)
+ *   Blinkanalyse testbilder/2026-11/20261103-213712-ab12-tolkning.jpg  (appens tolkning, før retting)
+ *   Blinkanalyse testbilder/2026-11/20261103-213712-ab12-justert.jpg   (etter manuell justering, med resultat)
  *   Blinkanalyse testbilder/2026-11/20261103-213712-ab12.json  (hjørner, hull, rettelser, innstillinger)
  *
  * Oppsett (én gang):
@@ -11,6 +13,9 @@
  *   2. Distribuer → Ny distribusjon → Type: Nettapp.
  *      Kjør som: Meg.   Hvem har tilgang: Alle.
  *   3. Godkjenn tilgang til Google Drive, og kopier nettapp-adressen (slutter på /exec).
+ *
+ * Etter en endring her: Distribuer → Administrer distribusjoner → blyanten → Versjon: Ny versjon → Distribuer.
+ * Da beholdes samme adresse.
  *
  * KEY under må være lik DRIVE_KEY i appen. Den holder bare tilfeldig trafikk ute; den er ikke hemmelig.
  */
@@ -20,6 +25,7 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_RECORD_CHARS = 512 * 1024;
 const ID_RE = /^\d{8}-\d{6}-[a-z0-9]{2,8}$/;
 const TYPES = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
+const ROLES = ["tolkning", "justert"];
 
 function doGet() {
   return reply({ ok: true, service: "blinkanalyse-testbilder" });
@@ -44,6 +50,18 @@ function doPost(e) {
       const bytes = Utilities.base64Decode(String(req.data || ""));
       if (!bytes.length || bytes.length > MAX_IMAGE_BYTES) return reply({ ok: false, error: "size" });
       folder.createFile(Utilities.newBlob(bytes, req.contentType, name));
+      return reply({ ok: true });
+    }
+
+    if (req.kind === "render") {                 // the app's drawings; a newer one replaces the old
+      if (ROLES.indexOf(req.role) < 0) return reply({ ok: false, error: "role" });
+      if (req.contentType !== "image/jpeg") return reply({ ok: false, error: "type" });
+      const bytes = Utilities.base64Decode(String(req.data || ""));
+      if (!bytes.length || bytes.length > MAX_IMAGE_BYTES) return reply({ ok: false, error: "size" });
+      const name = req.id + "-" + req.role + ".jpg";
+      const old = folder.getFilesByName(name);
+      while (old.hasNext()) old.next().setTrashed(true);
+      folder.createFile(Utilities.newBlob(bytes, "image/jpeg", name));
       return reply({ ok: true });
     }
 

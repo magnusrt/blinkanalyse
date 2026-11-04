@@ -13,5 +13,7 @@ Blinkene (A3 og A4) skrives ut fra «Skriv ut blinker» i appen. Skriv ut i 100 
 
 **Testbilder for feilsøking**
 Bilder som analyseres, sendes til mottakeren i `mottaker/Code.gs` (Google Apps Script) og lagres i
-Google Drive-mappen «Blinkanalyse testbilder». Brukeren kan slå det av i appen. Mottakeren settes opp
+Google Drive-mappen «Blinkanalyse testbilder»: originalbildet, appens tolkning før retting
+(`-tolkning.jpg`), resultatet etter manuell justering (`-justert.jpg`) og analysen som JSON.
+Brukeren kan slå det av i appen. Mottakeren settes opp
 én gang; se kommentaren øverst i `mottaker/Code.gs`. Adressen legges inn som `DRIVE_URL` i appen.

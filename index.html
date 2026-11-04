@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Blinkanalyse">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="app-version" content="fce5cdd9">
+<meta name="app-version" content="64bd195f">
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -1272,9 +1272,16 @@ const holeHooks = {
       ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
       if (sel) { ctx.fillStyle = "rgba(255,45,149,.28)"; ctx.fill(); }
       ctx.lineWidth = (sel ? 4.5 : 3.5) * L; ctx.strokeStyle = "rgba(0,0,0,.6)"; ctx.stroke();
-      ctx.lineWidth = (sel ? 2.5 : 1.8) * L; ctx.strokeStyle = "#ff2d95"; ctx.stroke();
-      ctx.fillStyle = "#ff2d95"; ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(1.5 * L, Math.min(3 * L, r * 0.12)), 0, Math.PI * 2); ctx.fill();
+      const col = v.diff && h.src === "manual" ? "#16A34A" : "#ff2d95";
+      ctx.lineWidth = (sel ? 2.5 : 1.8) * L; ctx.strokeStyle = col; ctx.stroke();
+      ctx.fillStyle = col; ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(1.5 * L, Math.min(3 * L, r * 0.12)), 0, Math.PI * 2); ctx.fill();
     });
+    if (v.diff && v.diff.removed) for (const [x, y] of v.diff.removed) {    // holes you deleted
+      const p = S(x, y), k = r * 0.7;
+      ctx.setLineDash([5 * L, 4 * L]); ctx.lineWidth = 1.8 * L; ctx.strokeStyle = "#8A8F8B";
+      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(p.x - k, p.y - k); ctx.lineTo(p.x + k, p.y + k); ctx.moveTo(p.x + k, p.y - k); ctx.lineTo(p.x - k, p.y + k); ctx.stroke();
+    }
     const RING = "#FFD60A", MRC = "#22D3EE", k100 = 100 / state.dist, sc = st => ((st.sx + st.sy) / 2);
     for (const g of groups) {
       const st = g.st; if (!st.ring) continue;
@@ -1610,11 +1617,11 @@ async function onFile(e) {
 const IMG = { bg: "#FFFFFF", ink: "#151916", muted: "#59625B", line: "#D5D9D4", accent: "#D4561A", soft: "#F3F4F1",
   g: { "g-best": "#1E7A46", "g-ok": "#4F7D1E", "g-weak": "#A86A00", "g-bad": "#B3261E" } };
 function rrect(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
-function buildReport() {
+function buildReport(opts = {}) {
   const sh = SHEETS[state.sheet], multi = !!sh.multi;
   const [x0, x1, y0, y1] = multi ? [sh.p.x0 - 3, sh.p.x1 + 3, sh.p.y0 - 0.8, sh.p.y1 + 0.8] : [-sh.g.GX - 8, sh.g.GX + 8, -sh.g.GY - 6, sh.g.GY + 6];
   const m = state.markers, srcPPM = Math.hypot(m[1].x - m[0].x, m[1].y - m[0].y) / (2 * PG.MX);
-  const ppmR = Math.max(4, Math.min(1500 / (x1 - x0), srcPPM * 1.1));
+  const ppmR = Math.max(4, Math.min((opts.maxW || 1500) / (x1 - x0), srcPPM * 1.1));
   const tgt = rectifyRegion(state.src, m, x0, x1, y0, y1, ppmR).canvas;
   const PAD = Math.round(tgt.width * 0.032), CW = tgt.width, W = CW + 2 * PAD, U = CW / 1500;
   const F = (wt, px) => `${wt} ${Math.round(px * U)}px "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
@@ -1631,7 +1638,7 @@ function buildReport() {
     c.beginPath(); c.arc(x + h * 0.38 + dot / 2, y - h * 0.72 + h / 2, dot, 0, Math.PI * 2); c.fillStyle = col; c.fill();
     text(t, x + h * 0.38 + dot * 2 + size * 0.25 * U, y, F(600, size), col); return w;
   };
-  const k = 100 / state.dist, now = new Date();
+  const k = 100 / state.dist, now = opts.when || new Date();
   // header
   let y = PAD + 52 * U;
   const tw = text("Blinkanalyse", PAD, y, FD(64), IMG.ink);
@@ -1642,22 +1649,31 @@ function buildReport() {
   y += 50 * U;
   const sub = [sh.label, `${fmt(state.dist, 0)} m`, state.ref.name ? `referanse: ${state.ref.name}` : ""].filter(Boolean).join("  ·  ");
   text(sub + (state.sample ? "  ·  eksempelbilde" : ""), PAD, y, F(400, 28), IMG.muted);
+  if (opts.label) { y += 46 * U; text(opts.label.toUpperCase(), PAD, y, F(600, 26), IMG.accent); }
   y += 30 * U;
   // target with markings
   const top = Math.round(y);
   c.drawImage(tgt, PAD, top);
-  const v = { W: PAD + tgt.width, s: ppmR / PPM, tx: PAD - (PG.W / 2 + x0) * ppmR, ty: top + (y1 - PG.H / 2) * ppmR, lw: Math.max(1, ppmR / 3), report: true, accent: IMG.accent,
+  const v = { diff: opts.diff || null, W: PAD + tgt.width, s: ppmR / PPM, tx: PAD - (PG.W / 2 + x0) * ppmR, ty: top + (y1 - PG.H / 2) * ppmR, lw: Math.max(1, ppmR / 3), report: true, accent: IMG.accent,
     toS(u, vv) { return { x: u * this.s + this.tx, y: vv * this.s + this.ty }; } };
   c.save(); c.beginPath(); c.rect(PAD, top, tgt.width, tgt.height); c.clip(); holeHooks.overlay(c, v); c.restore();
   c.strokeStyle = IMG.line; c.lineWidth = 2 * U; c.strokeRect(PAD, top, tgt.width, tgt.height);
   y = top + tgt.height + 70 * U;
+  if (opts.diff) {                                               // legend for the corrected image
+    let lx = PAD; const dot = (col, dashed) => { c.beginPath(); c.arc(lx + 14 * U, y - 10 * U, 12 * U, 0, Math.PI * 2); c.setLineDash(dashed ? [6 * U, 4 * U] : []); c.lineWidth = 4 * U; c.strokeStyle = col; c.stroke(); c.setLineDash([]); lx += 36 * U; };
+    for (const [col, dashed, t] of [["#ff2d95", false, "Funnet automatisk"], ["#16A34A", false, "Lagt til eller flyttet av deg"], ["#8A8F8B", true, "Slettet av deg"]]) {
+      dot(col, dashed); lx += text(t, lx, y, F(500, 24), IMG.ink) + 34 * U;
+    }
+    y += 64 * U;
+  }
   const row = (label, value, sub2) => {
     c.strokeStyle = IMG.line; c.lineWidth = 1.5 * U; c.beginPath(); c.moveTo(PAD, y - 46 * U); c.lineTo(W - PAD, y - 46 * U); c.stroke();
     text(label, PAD, y, F(400, 30), IMG.muted); text(value, W - PAD, y, FM(30), IMG.ink, "right");
     if (sub2) { y += 38 * U; text(sub2, W - PAD, y, FM(24), IMG.muted, "right"); }
     y += 70 * U;
   };
-  if (!multi) {
+  if (opts.panel === false) { y -= 40 * U; }
+  else if (!multi) {
     const st = computeStats(state.holes, state.cal), g = gradeOf(st);
     text("Korreksjon", PAD, y, FD(48), IMG.ink); y += 30 * U;
     if (st.n) {
@@ -1907,6 +1923,39 @@ function showSnap() { $("bSnap").setAttribute("aria-pressed", state.snap); $("bS
 state.snap = store.get("snap", true); showSnap();
 $("bSnap").addEventListener("click", () => { state.snap = !state.snap; store.set("snap", state.snap); showSnap(); setStatus(state.snap ? "Hull du plasserer eller flytter, finjusteres til sentrum av hullet." : "Finjustering er av. Hullene blir stående der du plasserer dem."); });
 
+/* ---------------- images for troubleshooting: the app's interpretation and the corrected result ---------------- */
+// Draw with the state of one detection run (its corners, sheet and automatic holes), then restore the live state.
+function withRunState(run, fn) {
+  const keep = { holes: state.holes, sheet: state.sheet, markers: state.markers, selected: state.selected, cal: state.cal, pg: PG };
+  try {
+    const paper = SHEETS[run.sheet].paper; state.sheet = run.sheet; setPage(paper); state.cal = state.cals[paper];
+    state.markers = run.markers.map(([x, y]) => ({ x, y })); state.holes = run.holes.map(([x, y]) => ({ x, y, src: "auto" })); state.selected = -1;
+    return fn();
+  } finally {
+    state.holes = keep.holes; state.sheet = keep.sheet; state.markers = keep.markers; state.selected = keep.selected; state.cal = keep.cal;
+    PG = keep.pg; RW = Math.round(PG.W * PPM); RH = Math.round(PG.H * PPM);
+  }
+}
+function dbgRenders(cur, changed) {
+  const out = {};
+  if (state.src !== cur.src) return out;                     // only while this photo is the one on screen
+  try {
+    if (!cur.tolkningDone && cur.runs.length && cur.runs[0].markers.length === 4) {
+      out.tolkning = withRunState(cur.runs[0], () => buildReport({ panel: false, maxW: 1200, label: "Appens tolkning, før retting", when: new Date(cur.createdAt) }));
+      cur.tolkningDone = true;
+    }
+  } catch (e) { console.error(e); }
+  try {
+    if (changed && state.view === "holes" && state.markers) {
+      const last = cur.runs[cur.runs.length - 1];
+      const removed = last ? last.holes.filter(a => !state.holes.some(h => Math.hypot(h.x - a[0], h.y - a[1]) < 0.5)) : [];
+      out.justert = buildReport({ maxW: 1200, label: "Etter manuell justering", diff: { removed } });
+    }
+  } catch (e) { console.error(e); }
+  return out;
+}
+const canvasJpeg = cv => new Promise((res, rej) => cv.toBlob(b => b ? res(b) : rej(new Error("toBlob")), "image/jpeg", 0.85));
+
 /* ---------------- test images for troubleshooting ---------------- */
 // Every photo you analyse is stored with what the app found, your corrections and the settings.
 // Claude version: the original as an artifact asset + one record in db collection "testbilder".
@@ -1931,7 +1980,7 @@ function showDbgInfo() {
   if (!IN_CLAUDE && !b) { el.textContent = "Lagring er ikke satt opp i denne versjonen."; return; }
   if (!b) return;
   const n = `${DBG.count} ${DBG.count === 1 ? "bilde" : "bilder"} lagret`;
-  if (b.kind === "drive") el.textContent = `${n} fra denne enheten` + (DBG.queued ? ` · ${DBG.queued} venter på nett` : "");
+  if (b.kind === "drive") el.textContent = `${n} fra denne enheten` + (DBG.queued ? ` · ${DBG.queued} venter på nett` : "") + (DBG.receiverOld ? ". Mottakeren må oppdateres for å lagre tolkning og justert bilde." : "");
   else el.textContent = n + (DBG.maxBytes ? ` · ${mb(DBG.bytes)} av ${mb(DBG.maxBytes)} MB brukt` : "");
 }
 async function originalBlob(file) {
@@ -1954,13 +2003,19 @@ function claudeBackend(assets, db) {
         .then(o => assets.upload(o.blob, { type: o.type }).then(r => { cur.image = { assetId: r.id, contentType: r.contentType, sizeBytes: r.sizeBytes, name: cur.name, reencoded: o.reencoded }; DBG.bytes += r.sizeBytes; }))
         .catch(e => { cur.imageErr = (e && e.code) || "upstream_error"; });
     },
-    async save(cur, rec) {
+    async save(cur, rec, renders = {}) {
       await cur.upload;
       rec.image = cur.image; rec.imageError = cur.imageErr;
+      const up = async cv => { const b = await canvasJpeg(cv), r = await assets.upload(b, { type: "image/jpeg" }); DBG.bytes += r.sizeBytes; return { assetId: r.id, sizeBytes: r.sizeBytes }; };
+      let oldJustert = null;
+      if (renders.tolkning) { try { cur.renders.tolkning = await up(renders.tolkning); } catch (_) { cur.tolkningDone = false; } }
+      if (renders.justert) { try { const j = await up(renders.justert); oldJustert = cur.renders.justert; cur.renders.justert = j; } catch (_) {} }
+      rec.renders = { ...cur.renders };
       const json = JSON.stringify(rec);
       if (json === cur.last) return "same";
       await db.collection("testbilder").doc(cur.id).set({ ...rec, updatedAt: new Date().toISOString() });
       cur.last = json;
+      if (oldJustert) assets.delete(oldJustert.assetId).catch(() => {});   // the record now points at the new one
       return cur.imageErr ? "partial" : "saved";
     }
   };
@@ -2008,12 +2063,17 @@ function driveBackend() {
         return OB.put({ id: cur.id, blob: o.blob, image: cur.image, imageDone: false, rec: null, recDirty: false });
       }).catch(e => { cur.imageErr = (e && e.code) || "encode_failed"; });
     },
-    async save(cur, rec) {
+    async save(cur, rec, renders = {}) {
       await cur.upload;
       const item = (await OB.get(cur.id)) || { id: cur.id, blob: null, imageDone: true, image: cur.image || null };
       rec.image = item.image; rec.imageError = cur.imageErr;
+      item.renders = item.renders || {};
+      for (const role of ["tolkning", "justert"]) if (renders[role]) {
+        try { item.renders[role] = await canvasJpeg(renders[role]); cur.renders[role] = `${cur.id}-${role}.jpg`; } catch (_) {}
+      }
+      rec.renders = { ...cur.renders };
       const json = JSON.stringify(rec);
-      if (json === cur.last && !item.recDirty) return "same";
+      if (json === cur.last && !item.recDirty && !renders.tolkning && !renders.justert) return "same";
       item.rec = { ...rec, updatedAt: new Date().toISOString() }; item.recDirty = true;
       await OB.put(item); cur.last = json;
       return be.flush(cur.id);
@@ -2033,8 +2093,17 @@ function driveBackend() {
           }
           if (item.recDirty && item.rec) {
             await drivePost({ kind: "record", id: item.id, record: item.rec });
-            await OB.del(item.id);
+            item.recDirty = false; await OB.put(item);
           }
+          for (const role of ["tolkning", "justert"]) {
+            const blob = item.renders && item.renders[role]; if (!blob) continue;
+            if (!DBG.receiverOld) {
+              try { await drivePost({ kind: "render", id: item.id, role, contentType: "image/jpeg", data: await blobB64(blob) }); }
+              catch (e) { if (e.code !== "server" || e.message !== "kind") throw e; DBG.receiverOld = true; showDbgInfo(); }   // receiver predates renders
+            }
+            delete item.renders[role]; await OB.put(item);
+          }
+          if (item.imageDone && !item.recDirty) await OB.del(item.id);
         } catch (e) {
           if (item.id === focusId) state = e.code === "offline" ? "queued" : "error:Mottakeren svarte med en feil, så bildet ligger i kø og prøves igjen senere.";
           if (e.code === "offline") break;
@@ -2058,7 +2127,7 @@ function dbgStart(file, src) {
   if (DBG.cur) { clearTimeout(DBG.cur.timer); dbgSave(DBG.cur); }        // the record is snapshotted now, before the state changes
   DBG.cur = null;
   if (!DBG.backend || !DBG.on || DBG.dead || !file) { setDbgChip(null); return; }
-  const cur = { id: dbgId(), name: file.name || "", createdAt: new Date().toISOString(), srcW: src.w, srcH: src.h, origW: src.origW || src.w, origH: src.origH || src.h,
+  const cur = { id: dbgId(), src, lastKey: "", tolkningDone: false, renders: {}, name: file.name || "", createdAt: new Date().toISOString(), srcW: src.w, srcH: src.h, origW: src.origW || src.w, origH: src.origH || src.h,
     autoMarkers: null, runs: [], image: null, imageErr: null, last: "", saving: false, again: false, timer: 0, saved: false, backend: DBG.backend };
   DBG.cur = cur; setDbgChip("Lagrer testbilde…");
   cur.backend.start(cur, file);
@@ -2098,15 +2167,19 @@ function dbgRecord(cur) {
 }
 function dbgTouch() {
   const cur = DBG.cur; if (!cur || !DBG.on) return;
-  clearTimeout(cur.timer); cur.timer = setTimeout(() => dbgSave(cur), cur.backend.kind === "drive" ? 4000 : 2000);
+  clearTimeout(cur.timer); cur.timer = setTimeout(() => dbgSave(cur), 4000);
 }
 async function dbgSave(cur) {
   if (!cur || DBG.dead) return;
   if (cur.saving) { cur.again = true; return; }                         // one write at a time per record
   const rec = dbgRecord(cur);                                             // snapshot of the state right now
+  const key = JSON.stringify(rec), changed = key !== cur.lastKey;
+  const renders = dbgRenders(cur, changed);                               // drawn now, while this photo is on screen
+  if (!changed && !renders.tolkning) return;
   cur.saving = true;
   try {
-    const r = await cur.backend.save(cur, rec);
+    const r = await cur.backend.save(cur, rec, renders);
+    if (r !== "error" && !(typeof r === "string" && r.startsWith("error:"))) cur.lastKey = key;
     if (r === "same") return;
     if ((r === "saved" || r === "partial") && !cur.saved) { cur.saved = true; if (cur.backend.kind === "claude") DBG.count++; showDbgInfo(); }
     if (DBG.cur !== cur) return;
