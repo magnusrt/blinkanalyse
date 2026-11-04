@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Blinkanalyse">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="app-version" content="5671bf24">
+<meta name="app-version" content="6b0f752b">
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -309,6 +309,7 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
       <div class="tools" id="toolsMarkers" hidden>
         <button class="btn btn-primary" id="bApply" type="button">Bruk hjørnene</button>
         <button class="btn" id="bCancel" type="button">Avbryt</button>
+        <button class="btn" id="bSnapM" type="button" aria-pressed="true" title="Flytter et hjørne du drar, til midten av hjørnemerket i bildet"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.5"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/></svg><span id="bSnapMTxt">Finjuster: på</span></button>
       </div>
       <div class="status" id="status" role="status" aria-live="polite"></div>
     </section>
@@ -544,11 +545,39 @@ function rankFilter(src, w, h, r, isMax) {
 
 /* ---------------- fiducial markers ---------------- */
 function findMarkersGray(g, w, h) {
+  const r1 = findMarkersPass(g, w, h, false);
+  if (r1 && r1.ok) return r1;
+  // second try for markers that look grey: light reflected off glossy toner, or a pale print
+  const r2 = findMarkersPass(g, w, h, true);
+  if (r2 && r2.ok) return { ...r2, pass: 2 };
+  return r1 || r2;
+}
+// Brightness of the paper around each pixel: the largest value of a lightly smoothed image in the nearby blocks.
+function localWhite(g, w, h, r) {
+  const B = Math.max(4, Math.round(r / 2)), bw = Math.ceil(w / B), bh = Math.ceil(h / B), bm = new Float32Array(bw * bh);
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    const i = y * w + x, v = (g[i] + g[i - 1] + g[i + 1] + g[i - w] + g[i + w]) / 5, b = ((y / B) | 0) * bw + ((x / B) | 0);
+    if (v > bm[b]) bm[b] = v;
+  }
+  const sp = new Float32Array(bw * bh);
+  for (let by = 0; by < bh; by++) for (let bx = 0; bx < bw; bx++) {
+    let m = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const yy = by + dy, xx = bx + dx; if (yy >= 0 && xx >= 0 && yy < bh && xx < bw && bm[yy * bw + xx] > m) m = bm[yy * bw + xx]; }
+    sp[by * bw + bx] = m;
+  }
+  const out = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) out[y * w + x] = sp[((y / B) | 0) * bw + ((x / B) | 0)];
+  return out;
+}
+let EVEN_MAX = 0.16;
+function findMarkersPass(g, w, h, relaxed) {
   const W1 = w + 1, I = new Float64Array(W1 * (h + 1));
   for (let y = 0; y < h; y++) { let row = 0; for (let x = 0; x < w; x++) { row += g[y * w + x]; I[(y + 1) * W1 + x + 1] = I[y * W1 + x + 1] + row; } }
   const r = Math.max(10, Math.round(Math.max(w, h) / 14));
   const mask = new Uint8Array(w * h);
-  for (let y = 0; y < h; y++) {
+  if (relaxed) {                                                   // darker than 72 % of the paper around it
+    const wh = localWhite(g, w, h, r);
+    for (let i = 0; i < w * h; i++) mask[i] = (wh[i] > 80 && g[i] < wh[i] * 0.72) ? 1 : 0;
+  } else for (let y = 0; y < h; y++) {
     const y0 = Math.max(0, y - r), y1 = Math.min(h, y + r + 1);
     for (let x = 0; x < w; x++) {
       const x0 = Math.max(0, x - r), x1 = Math.min(w, x + r + 1);
@@ -557,14 +586,35 @@ function findMarkersGray(g, w, h) {
       mask[y * w + x] = (v < mean * 0.6 && v < 150) ? 1 : 0;
     }
   }
-  const { stats } = labelCC(mask, w, h, false);
+  const { stats, lab } = labelCC(mask, w, h, false);
   const L = Math.max(w, h), minA = (L * 0.012) ** 2;
   const cands = [];
+  let spread = null, gs = null, gs2 = null, gn = null, white = null;
+  if (relaxed) {
+    // second moments: a square (or the REF ring) is compact, background shapes are not.
+    // evenness: a marker is evenly dark (also with glare); a blurred QR code or print is mottled.
+    spread = new Float64Array(stats.length + 1); gs = new Float64Array(stats.length + 1); gs2 = new Float64Array(stats.length + 1); gn = new Float64Array(stats.length + 1);
+    white = localWhite(g, w, h, r);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x, id = lab[i]; if (!id) continue; const s = stats[id - 1];
+      const dx = x - s.sx / s.area, dy = y - s.sy / s.area; spread[id] += dx * dx + dy * dy;
+      if (x > 0 && y > 0 && x < w - 1 && y < h - 1 && lab[i - 1] === id && lab[i + 1] === id && lab[i - w] === id && lab[i + w] === id) {   // inside, away from the blurred edge
+        gs[id] += g[i]; gs2[id] += g[i] * g[i]; gn[id]++;
+      }
+    }
+  }
   for (const s of stats) {
     if (s.area < minA || s.border) continue;
     const bw = s.x1 - s.x0 + 1, bh = s.y1 - s.y0 + 1, fill = s.area / (bw * bh), asp = bw / bh;
     if (fill < 0.5 || asp < 0.45 || asp > 2.2) continue;
     const cx = s.sx / s.area + 0.5, cy = s.sy / s.area + 0.5;
+    if (spread) {
+      if (spread[s.id] / (s.area * s.area) > 0.27) continue;          // square 0.167, REF ring 0.237
+      const nn = Math.max(1, gn[s.id]), m = gs[s.id] / nn, sd = Math.sqrt(Math.max(0, gs2[s.id] / nn - m * m));
+      const paper = white[Math.min(h - 1, Math.floor(cy)) * w + Math.min(w - 1, Math.floor(cx))];
+      if (window.__baDebugMarkers) window.__baDebugMarkers.push({ x: cx, y: cy, area: s.area, even: +(sd / Math.max(1, paper - m)).toFixed(3) });
+      if (sd > EVEN_MAX * Math.max(1, paper - m)) continue;
+    }
     const rr = Math.max(1, Math.round(Math.min(bw, bh) * 0.08));
     let light = 0, tot = 0;
     for (let dy = -rr; dy <= rr; dy++) for (let dx = -rr; dx <= rr; dx++) {
@@ -602,6 +652,14 @@ function findMarkersGray(g, w, h) {
     const oriented = start >= 0;
     if (!oriented) start = q.reduce((bi, p, i) => (p.x + p.y < q[bi].x + q[bi].y ? i : bi), 0);
     const o = [0, 1, 2, 3].map(i => q[(start + i) % 4]);
+    // each marker must be about the size the corner positions predict: 24 mm against 250 mm and 370 mm
+    let sized = true;
+    for (let i = 0; i < 4 && sized; i++) {
+      const ea = dist(o[i], o[(i + 1) % 4]), eb = dist(o[i], o[(i + 3) % 4]);
+      const want = (Math.min(ea, eb) * 24 / 250 + Math.max(ea, eb) * 24 / 370) / 2, got = Math.sqrt(o[i].area / (o[i].ref ? 0.83 : 1));
+      if (got < want * 0.55 || got > want * 1.7) sized = false;
+    }
+    if (!sized) continue;
     const ratio = dist(o[0], o[1]) / dist(o[1], o[2]);       // expected 250/370 ≈ 0.68
     const score = Q * (oriented ? 3 : refs === 0 ? 1 : 0.2) * (ratio > 0.3 && ratio < 1.25 ? 1 : 0.2);
     if (!best || score > best.score) best = { score, pts: o.map(p => ({ x: p.x, y: p.y })), refs, ratio, oriented };
@@ -1343,7 +1401,14 @@ const markerHooks = {
   hit(cx, cy, v) { const lim = 34 / v.s; let bi = -1, bd = lim; state.markersEdit.forEach((m, i) => { const d = Math.hypot(m.x - cx, m.y - cy); if (d < bd) { bd = d; bi = i; } }); return bi; },
   itemPos(i) { return state.markersEdit[i]; },
   drag(i, x, y) { state.markersEdit[i] = { x: clamp(x, 0, state.src.w), y: clamp(y, 0, state.src.h) }; },
-  dragEnd() { updateGuideSheet(); },
+  dragEnd(i) {
+    if (state.snap && i >= 0) {
+      const r = refineMarker(state.markersEdit[i].x, state.markersEdit[i].y, state.markersEdit);
+      if (r) { state.markersEdit[i] = r; setStatus(`Hjørnet ${MARK_LABELS[i]} er finjustert til midten av hjørnemerket.`); }
+      else setStatus(`Fant ikke noe hjørnemerke der hjørnet ${MARK_LABELS[i]} ble sluppet, så det står der du slapp det.`, true);
+    }
+    updateGuideSheet(); viewer.req();
+  },
   overlay(ctx, v) {
     drawCenterGuide(ctx, v);
     const P = state.markersEdit.map(m => v.toS(m.x, m.y));
@@ -1362,6 +1427,61 @@ const markerHooks = {
     c.beginPath(); c.moveTo(size / 2, 8); c.lineTo(size / 2, size - 8); c.moveTo(8, size / 2); c.lineTo(size - 8, size / 2); c.stroke();
   }
 };
+
+/* Corner fine adjustment: find the printed corner marker (a solid black square, the REF ones with a white
+   square inside) near where a corner was dropped, and return its centre. null when there is none. */
+function refineMarker(x, y, quad, src = state.src) {
+  const W = src.w, Hh = src.h, d = src.data.data, L = Math.max(W, Hh);
+  // expected marker side from the current corners: 24 mm of 250 mm across and 370 mm down (A3 and A4 alike)
+  const e = (a, b) => Math.hypot(quad[a].x - quad[b].x, quad[a].y - quad[b].y);
+  const ms = clamp(((e(0, 1) + e(2, 3)) / 2 * 24 / 250 + (e(1, 2) + e(3, 0)) / 2 * 24 / 370) / 2, 10, L * 0.2);
+  const R = Math.round(clamp(ms * 2.2, 40, L * 0.25));
+  const x0 = Math.max(0, Math.round(x - R)), y0 = Math.max(0, Math.round(y - R));
+  const x1 = Math.min(W, Math.round(x + R)), y1 = Math.min(Hh, Math.round(y + R)), cw = x1 - x0, ch = y1 - y0;
+  if (cw < 8 || ch < 8) return null;
+  // work on a copy no bigger than ~360 px across, so a large photo stays quick
+  const k = Math.min(1, 360 / Math.max(cw, ch)), gw = Math.max(8, Math.round(cw * k)), gh = Math.max(8, Math.round(ch * k));
+  const g = new Float32Array(gw * gh), hist = new Uint32Array(256);
+  for (let v = 0; v < gh; v++) for (let u = 0; u < gw; u++) {
+    const px = Math.min(W - 1, x0 + Math.floor((u + 0.5) / k)), py = Math.min(Hh - 1, y0 + Math.floor((v + 0.5) / k)), q = (py * W + px) * 4;
+    const l = 0.299 * d[q] + 0.587 * d[q + 1] + 0.114 * d[q + 2]; g[v * gw + u] = l; hist[Math.min(255, l | 0)]++;
+  }
+  // Try several levels relative to the paper and keep the most square-like marker. A grey marker (glare) is only
+  // whole at a high level; something dark nearby, like the floor, must not decide the level.
+  const n = gw * gh; let acc = 0, p90 = 255; for (let t = 0; t < 256; t++) { acc += hist[t]; if (acc >= n * 0.9) { p90 = t; break; } }
+  const msg = ms * k, px = (x - x0) * k, py = (y - y0) * k, mask = new Uint8Array(n), cands = [];
+  for (const f of [0.45, 0.55, 0.65, 0.75]) {
+    const thr = f * p90;
+    for (let i = 0; i < n; i++) mask[i] = g[i] < thr ? 1 : 0;
+    const { stats, lab } = labelCC(mask, gw, gh, false);
+    // evenness inside each blob, away from its blurred edge: a marker is evenly dark (also with glare), a QR code is mottled
+    const s1 = new Float64Array(stats.length + 1), s2 = new Float64Array(stats.length + 1), sn = new Float64Array(stats.length + 1);
+    for (let v = 1; v < gh - 1; v++) for (let u = 1; u < gw - 1; u++) {
+      const i = v * gw + u, id = lab[i];
+      if (id && lab[i - 1] === id && lab[i + 1] === id && lab[i - gw] === id && lab[i + gw] === id) { s1[id] += g[i]; s2[id] += g[i] * g[i]; sn[id]++; }
+    }
+    for (const st of stats) {
+      if (st.border) continue;                                       // the background beyond the paper, or cut off
+      if (sn[st.id] >= 4) { const m = s1[st.id] / sn[st.id], sd = Math.sqrt(Math.max(0, s2[st.id] / sn[st.id] - m * m)); if (sd > EVEN_MAX * Math.max(1, p90 - m)) continue; }
+      const bw = st.x1 - st.x0 + 1, bh = st.y1 - st.y0 + 1, side = Math.sqrt(bw * bh), fill = st.area / (bw * bh), asp = bw / bh;
+      if (side < msg * 0.45 || side > msg * 2.4 || fill < 0.45 || asp < 0.45 || asp > 2.2) continue;
+      const cx = st.sx / st.area + 0.5, cy = st.sy / st.area + 0.5, dist = Math.hypot(cx - px, cy - py);
+      const inside = px >= st.x0 - 1 && px <= st.x1 + 1 && py >= st.y0 - 1 && py <= st.y1 + 1;
+      if (!inside && dist > Math.min(R * k, msg * 1.6)) continue;      // dropped far from any marker: leave it
+      cands.push({ ...st, cx, cy, side, fill, dist, inside });
+    }
+  }
+  // the same marker shows up at several levels; a part of it (split by glare) gives way to the whole, compact one
+  const live = cands.filter(c => !cands.some(d => d !== c && d.area > c.area * 1.08 && d.fill >= 0.7 &&
+    c.cx >= d.x0 && c.cx <= d.x1 + 1 && c.cy >= d.y0 && c.cy <= d.y1 + 1));
+  let pick = null, pickScore = -Infinity;
+  for (const c of live) {
+    const quality = Math.min(c.fill, 0.95) - 0.3 * Math.abs(Math.log(c.side / msg)) - 0.4 * Math.min(1, c.dist / (msg * 3));
+    const score = (c.inside ? 10 : 0) + quality;
+    if (score > pickScore) { pickScore = score; pick = { x: x0 + c.cx / k, y: y0 + c.cy / k }; }
+  }
+  return pick;
+}
 
 /* Centre guide while adjusting corners: the aim point(s) projected from the current corners.
    With the corners right, the guide sits exactly on the printed aim point. */
@@ -1559,7 +1679,8 @@ function enterMarkers(msg) {
   state.markersEdit = (state.markers || defaultMarkers()).map(p => ({ ...p }));
   updateGuideSheet();
   $("toolsHoles").hidden = true; $("toolsMarkers").hidden = false;
-  setHint("Dra hvert merke til midten av hjørnefeltet. Det blå krysset skal ligge oppå siktepunktet.");
+  setHint(state.snap ? "Dra hvert merke inn på hjørnefeltet, så finjusteres det til midten. Det blå krysset skal ligge oppå siktepunktet."
+    : "Dra hvert merke til midten av hjørnefeltet. Det blå krysset skal ligge oppå siktepunktet.");
   viewer.setSource(state.src.canvas, state.src.w, state.src.h, 10);
   viewer.fit(0, 0, state.src.w, state.src.h);
   setStatus(msg || "Juster hjørnemerkene til det blå krysset og ruten ligger oppå det trykte siktepunktet. Trykk så «Bruk hjørnene».", !!msg);
@@ -1926,9 +2047,10 @@ if (!IN_CLAUDE) {
   window.addEventListener("appinstalled", hide);
 }
 
-function showSnap() { $("bSnap").setAttribute("aria-pressed", state.snap); $("bSnap").classList.toggle("btn-primary", false); $("bSnapTxt").textContent = state.snap ? "Finjuster: på" : "Finjuster: av"; }
+function showSnap() { for (const [b, t] of [["bSnap", "bSnapTxt"], ["bSnapM", "bSnapMTxt"]]) { $(b).setAttribute("aria-pressed", state.snap); $(t).textContent = state.snap ? "Finjuster: på" : "Finjuster: av"; } }
 state.snap = store.get("snap", true); showSnap();
 $("bSnap").addEventListener("click", () => { state.snap = !state.snap; store.set("snap", state.snap); showSnap(); setStatus(state.snap ? "Hull du plasserer eller flytter, finjusteres til sentrum av hullet." : "Finjustering er av. Hullene blir stående der du plasserer dem."); });
+$("bSnapM").addEventListener("click", () => { state.snap = !state.snap; store.set("snap", state.snap); showSnap(); setStatus(state.snap ? "Hjørner du drar, finjusteres til midten av hjørnemerket." : "Finjustering er av. Hjørnene blir stående der du slipper dem."); });
 
 /* ---------------- this device: its own ID, and a name the user may give it ---------------- */
 // The ID is made once and kept in this browser (or installed app). Saved photos go in a folder per ID.
@@ -2316,7 +2438,7 @@ const savedLoads = store.get("loads", null);
 if (Array.isArray(savedLoads)) state.loads = Array.from({ length: 12 }, (_, i) => String(savedLoads[i] || ""));
 buildLoadTable();
 
-window.__ba = { refineHole, enclosingCircle, buildReport, enterMarkers, state, T, PPM, findMarkers, findMarkersGray, rectify, analyseRect, detectHoles, computeStats, processSource, sourceFromCanvas, SAMPLE_TRUTH, makeSamplePhoto };
+window.__ba = { viewer, refineHole, refineMarker, enclosingCircle, buildReport, enterMarkers, state, T, PPM, findMarkers, findMarkersGray, rectify, analyseRect, detectHoles, computeStats, processSource, sourceFromCanvas, SAMPLE_TRUTH, makeSamplePhoto };
 
 (async () => {
   await frame();
