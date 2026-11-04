@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Blinkanalyse">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="app-version" content="064f1354">
+<meta name="app-version" content="fce5cdd9">
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -1913,7 +1913,7 @@ $("bSnap").addEventListener("click", () => { state.snap = !state.snap; store.set
 // Web app (GitHub Pages): sent to a Google Apps Script receiver that saves <id>.jpg + <id>.json in the owner's
 // Google Drive folder «Blinkanalyse testbilder/<YYYY-MM>». No setup on the phone. An IndexedDB outbox keeps
 // photos taken without network until they can be sent.
-const APP_VERSION = "2026-11-03";
+const APP_VERSION = "2026-11-04";
 const DBG = { backend: null, on: true, cur: null, count: 0, bytes: 0, maxBytes: 0, dead: false, queued: 0 };
 const r3 = v => Math.round(v * 1000) / 1000;
 const ptsOut = a => (a || []).map(p => [r3(p.x), r3(p.y)]);
@@ -1968,7 +1968,7 @@ function claudeBackend(assets, db) {
 
 /* --- Web app backend: Google Drive receiver (Apps Script), with an IndexedDB outbox --- */
 // The receiver URL is public in this code; the key only keeps random traffic out, it is not a secret.
-const DRIVE_URL = "";
+const DRIVE_URL = "https://script.google.com/macros/s/AKfycbz6nSPH8lmb0HvWwezdDkHZfBjnMAvdpmvUt0JmjNWpOtlXo4E3faL2roYR3qjE-aw/exec";
 const DRIVE_KEY = "ba308-k7q2m9x4";
 const OB = {
   db: null,
