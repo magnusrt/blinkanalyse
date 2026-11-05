@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Blinkanalyse">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="app-version" content="5dc1a03f">
+<meta name="app-version" content="16dd5de9">
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -207,6 +207,9 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
 .print-item .pi-msg.warn { color: var(--accent); }
 .print-tips { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; font-size: 0.84rem; color: var(--ink); max-width: 70ch; }
 .modal-box.wide { width: min(860px, 100%); }
+#installModal .modal-box { width: min(460px, 100%); }
+.install-steps { margin: 0; padding-left: 1.3em; display: grid; gap: 8px; font-size: 0.92rem; line-height: 1.45; }
+.ios-share { width: 1.25em; height: 1.25em; vertical-align: -0.25em; fill: none; stroke: var(--focus, #2f6fde); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .dbg-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 0.88rem; cursor: pointer; }
 .dbg-row input { width: 18px; height: 18px; accent-color: var(--accent); }
 .dev-field { display: flex; margin-top: 12px; }
@@ -235,6 +238,7 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
       <input class="vh" type="file" id="fileLib" accept="image/*">
       <label class="btn btn-primary" for="fileCam"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Ta bilde</label>
       <label class="btn" for="fileLib"><svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 16l5-5 4 4 3-3 5 5"/></svg>Velg bilde</label>
+      <button class="btn" id="bInstallTop" type="button" hidden><svg viewBox="0 0 24 24"><rect x="6.5" y="2.5" width="11" height="19" rx="2.2"/><path d="M12 7v7.5M8.8 11.5 12 14.7l3.2-3.2M10 18.5h4"/></svg>Installer</button>
       <button class="btn" id="bPrint" type="button" aria-haspopup="dialog"><svg viewBox="0 0 24 24"><path d="M7 8V3.5h10V8"/><rect x="3.5" y="8" width="17" height="8.5" rx="1.5"/><path d="M7 14h10v6.5H7z"/></svg>Skriv ut blinker</button>
     </div>
   </header>
@@ -410,6 +414,17 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
     <p class="ro-note" style="margin-top:10px">DFS 100 m-pappskive: legg et blått eller grønt ark bak skiva og fotografer hele det sorte feltet rett forfra, med skivas overkant opp i bildet. Appen finner det sorte feltet og ringene selv, gir poeng per skudd (innertier merkes 10*) og regner korreksjonen som ellers. Stemmer det ikke, bruk «Juster hjørner» og dra de fire punktene ut på ytterringen der den krysser aksene, ved de fire «1»-tallene.</p>
     <p class="ro-note" style="margin-top:10px">Annen skive: skriv ut transparenten på transparentfilm og legg den over skiva med krysset på siktepunktet. Du kan lese treffpunkt, klikk og gruppe rett av den, eller ta bilde. Appen leser da bare hull der et blått eller grønt ark bak skiva skinner gjennom, så skivas eget trykk ikke forveksles med hull. Hjørnemerkene må ligge over lyst papir, og unngå gjenskinn fra plasten.</p>
   </section>
+</div>
+<div class="modal" id="installModal" hidden role="dialog" aria-modal="true" aria-labelledby="installTitle">
+  <div class="modal-box">
+    <div class="modal-top"><h2 id="installTitle">Installer Blinkanalyse</h2><button class="btn" id="installClose" type="button">Lukk</button></div>
+    <ol class="install-steps">
+      <li>Trykk på Del-knappen <svg class="ios-share" viewBox="0 0 24 24" aria-label="Del"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M7 10H5.5v10.5h13V10H17"/></svg> i Safari, nederst eller øverst på skjermen.</li>
+      <li>Bla ned og velg «Legg til på Hjem-skjerm».</li>
+      <li>Trykk «Legg til». Blinkanalyse ligger da på hjemskjermen og virker også uten nett.</li>
+    </ol>
+    <p id="installNote">Bruker du Chrome på iPhone, finner du Del-knappen i adressefeltet.</p>
+  </div>
 </div>
 <div class="modal" id="printModal" hidden role="dialog" aria-modal="true" aria-labelledby="printTitle">
   <div class="modal-box wide">
@@ -2301,20 +2316,37 @@ if (!IN_CLAUDE) {
   if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
     window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
   }
+  // Install: Chrome, Edge and Android offer it themselves (beforeinstallprompt); iPhone and iPad need Share → Add to Home Screen.
+  // The banner can be put away; the «Installer» button at the top stays until the app is installed.
   const installed = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
-  const dismissed = store.get("installHidden", false);
+  const dismissed = store.get("installHidden", false), top = $("bInstallTop");
   let deferred = null;
   const hide = () => { $("installNotice").hidden = true; };
-  if (!installed && !dismissed) {
+  const done = () => { hide(); top.hidden = true; };
+  if (!installed) {
     if (IS_IOS) {
-      $("installText").textContent = "Trykk Del-knappen i Safari og velg «Legg til på Hjem-skjerm». Da åpnes den som en egen app og virker uten nett.";
-      $("installNotice").hidden = false;
+      top.hidden = false;
+      if (!dismissed) { $("installText").textContent = "Trykk Del-knappen i Safari og velg «Legg til på Hjem-skjerm». Da åpnes den som en egen app og virker uten nett."; $("installNotice").hidden = false; }
     }
-    window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); deferred = e; $("bInstall").hidden = false; $("installNotice").hidden = false; });
+    window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); deferred = e; top.hidden = false; $("bInstall").hidden = false; if (!dismissed) $("installNotice").hidden = false; });
   }
-  $("bInstall").addEventListener("click", async () => { if (!deferred) return; deferred.prompt(); try { await deferred.userChoice; } catch (_) {} deferred = null; hide(); });
+  const install = async () => {
+    if (deferred) {
+      const ev = deferred; deferred = null; ev.prompt();
+      try { const r = await ev.userChoice; if (r && r.outcome === "accepted") done(); else { hide(); top.hidden = true; setStatus("Du kan installere senere fra nettleserens meny («Installer app»)."); } } catch (_) { hide(); }
+      return;
+    }
+    if (IS_IOS) { $("installNote").hidden = !/CriOS|FxiOS|EdgiOS/.test(navigator.userAgent); $("installModal").hidden = false; $("installClose").focus(); return; }
+    top.hidden = true; setStatus("Åpne nettleserens meny og velg «Installer app» eller «Legg til på startskjermen».");
+  };
+  $("bInstall").addEventListener("click", install);
+  top.addEventListener("click", install);
+  const closeHow = () => { $("installModal").hidden = true; top.focus(); };
+  $("installClose").addEventListener("click", closeHow);
+  $("installModal").addEventListener("click", e => { if (e.target === $("installModal")) closeHow(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("installModal").hidden) closeHow(); });
   $("bInstallHide").addEventListener("click", () => { store.set("installHidden", true); hide(); });
-  window.addEventListener("appinstalled", hide);
+  window.addEventListener("appinstalled", () => { done(); setStatus("Blinkanalyse er installert. Du finner den på hjemskjermen eller i appmenyen."); });
 }
 
 function showSnap() { for (const [b, t] of [["bSnap", "bSnapTxt"], ["bSnapM", "bSnapMTxt"]]) { $(b).setAttribute("aria-pressed", state.snap); $(t).textContent = state.snap ? "Finjuster: på" : "Finjuster: av"; } }
