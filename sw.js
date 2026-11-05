@@ -1,5 +1,5 @@
 // Blinkanalyse offline cache. Pages are network-first so updates arrive; everything else cache-first.
-const CACHE = "blinkanalyse-6b0f752b", FONTS = "blinkanalyse-fonts";
+const CACHE = "blinkanalyse-beb16878", FONTS = "blinkanalyse-fonts";
 const CORE = ["./", "index.html", "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-512.png", "icons/apple-touch-icon.png"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(CORE)).then(() => self.skipWaiting()));
