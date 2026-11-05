@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Blinkanalyse">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="app-version" content="dee12e06">
+<meta name="app-version" content="5dc1a03f">
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -792,20 +792,25 @@ function findDfs(src) {
   const { sxx, syy, sxy } = best, sq = Math.sqrt(sxx * syy - sxy * sxy), t = Math.sqrt(sxx + syy + 2 * sq);
   const f = 2 / DFS.black / k, m00 = (sxx + sq) / t * f, m01 = sxy / t * f, m11 = (syy + sq) / t * f;
   let H = [m00, -m01, (best.mx + 0.5) / k, m01, -m11, (best.my + 0.5) / k, 0, 0, 1];   // design mm (y up) -> image px
-  // then the rings, from the inside out: two or more circles of different size fix centre, scale and perspective
+  const r = dfsFitFrom(src, H);
+  return r ? { ...r, ok: true } : { pts: dfsAxisPts(H), H, rings: 0, outer: 0, roll: 0, ok: true };
+}
+const dfsAxisPts = H => DFS_AXES.map(([x, y]) => (q => ({ x: q[0], y: q[1] }))(applyH(H, x, y)));
+// The rings, from the inside out: two or more circles of different size fix centre, scale and perspective;
+// the ring numbers on the axes fix which way is up. Null when too few rings are found.
+function dfsFitFrom(src, H) {
   const S = dfsSampler(src);
   const ALL = [[DFS.inner, "w"], [30, "w"], [60, "w"], [90, "w"], [120, "e"], [150, "b"], [180, "b"], [210, "b"], [240, "b"], [270, "b"], [300, "b"]];
   let used = 0, outer = 0;
   for (const [maxR, win] of [[150, 6], [210, 6], [300, 6], [300, 3.5]]) {
     const obs = dfsRingPoints(S, H, ALL.filter(([R]) => R <= maxR), win);
-    if (obs.rings < 2) { if (maxR === 150) return { pts: DFS_AXES.map(([x, y]) => (q => ({ x: q[0], y: q[1] }))(applyH(H, x, y))), H, rings: obs.rings, roll: 0, ok: true }; break; }
+    if (obs.rings < 2) { if (maxR === 150) return null; break; }
     const Hn = dfsFitH(H, obs.pts); if (!Hn) break;
     H = Hn; used = obs.rings; outer = obs.maxR;
   }
-  // which way is up: the ring numbers sit on the axes
   const roll = dfsRoll(S, H);
   if (roll) { const c = Math.cos(roll), sn = Math.sin(roll); H = mul3(H, [c, -sn, 0, sn, c, 0, 0, 0, 1]); }
-  return { pts: DFS_AXES.map(([x, y]) => (q => ({ x: q[0], y: q[1] }))(applyH(H, x, y))), H, rings: used, outer, roll: roll * 180 / Math.PI, ok: true };
+  return { pts: dfsAxisPts(H), H, rings: used, outer, roll: roll * 180 / Math.PI };
 }
 function dfsSampler(src) {                                           // bilinear luminance and saturation at image px
   const s = src.data.data, W = src.w, Hh = src.h;
@@ -1617,6 +1622,11 @@ const markerHooks = {
   itemPos(i) { return state.markersEdit[i]; },
   drag(i, x, y) { state.markersEdit[i] = { x: clamp(x, 0, state.src.w), y: clamp(y, 0, state.src.h) }; },
   dragEnd(i) {
+    if (state.snap && i >= 0 && SHEETS[state.sheet].dfs) {              // DFS: fit the rings from where the points are now
+      const H0 = solveH(DFS_AXES, state.markersEdit.map(m => [m.x, m.y])), r = H0 && dfsFitFrom(state.src, H0);
+      if (r && r.rings >= 3 && r.outer >= 240) { state.markersEdit = r.pts; setStatus(`Punktene er finjustert til ytterringen ved «1»-tallene (${r.rings} ringer brukt).`); }
+      else setStatus("Fant ikke ringene godt nok rundt punktene, så de står der du slapp dem. Dra dem nærmere ytterringen, eller slå av «Finjuster».", true);
+    }
     if (state.snap && i >= 0 && !SHEETS[state.sheet].dfs) {             // the DFS frame has no printed markers to snap to
       const r = refineMarker(state.markersEdit[i].x, state.markersEdit[i].y, state.markersEdit);
       if (r) { state.markersEdit[i] = r; setStatus(`Hjørnet ${MARK_LABELS[i]} er finjustert til midten av hjørnemerket.`); }
@@ -1912,8 +1922,8 @@ function enterMarkers(msg) {
   state.view = "markers"; viewer.h = markerHooks;
   state.markersEdit = (state.markers || defaultMarkers()).map(p => ({ ...p }));
   updateGuideSheet();
-  $("toolsHoles").hidden = true; $("toolsMarkers").hidden = false; $("bSnapM").hidden = !!SHEETS[state.sheet].dfs;
-  setHint(SHEETS[state.sheet].dfs ? "Dra de fire punktene ut på ytterringen der den krysser aksene, ved de fire «1»-tallene."
+  $("toolsHoles").hidden = true; $("toolsMarkers").hidden = false;
+  setHint(SHEETS[state.sheet].dfs ? (state.snap ? "Dra et punkt omtrent ut på ytterringen ved «1», så finjusteres alle fire til ringen." : "Dra de fire punktene ut på ytterringen der den krysser aksene, ved de fire «1»-tallene.")
     : state.snap ? "Dra hvert merke inn på hjørnefeltet, så finjusteres det til midten. Det blå krysset skal ligge oppå siktepunktet."
     : "Dra hvert merke til midten av hjørnefeltet. Det blå krysset skal ligge oppå siktepunktet.");
   viewer.setSource(state.src.canvas, state.src.w, state.src.h, 10);
@@ -2310,7 +2320,9 @@ if (!IN_CLAUDE) {
 function showSnap() { for (const [b, t] of [["bSnap", "bSnapTxt"], ["bSnapM", "bSnapMTxt"]]) { $(b).setAttribute("aria-pressed", state.snap); $(t).textContent = state.snap ? "Finjuster: på" : "Finjuster: av"; } }
 state.snap = store.get("snap", true); showSnap();
 $("bSnap").addEventListener("click", () => { state.snap = !state.snap; store.set("snap", state.snap); showSnap(); setStatus(state.snap ? "Hull du plasserer eller flytter, finjusteres til sentrum av hullet." : "Finjustering er av. Hullene blir stående der du plasserer dem."); });
-$("bSnapM").addEventListener("click", () => { state.snap = !state.snap; store.set("snap", state.snap); showSnap(); setStatus(state.snap ? "Hjørner du drar, finjusteres til midten av hjørnemerket." : "Finjustering er av. Hjørnene blir stående der du slipper dem."); });
+$("bSnapM").addEventListener("click", () => { state.snap = !state.snap; store.set("snap", state.snap); showSnap();
+  const dfs = SHEETS[state.sheet].dfs;
+  setStatus(state.snap ? (dfs ? "Punkter du drar, finjusteres til ytterringen ved «1»-tallene." : "Hjørner du drar, finjusteres til midten av hjørnemerket.") : (dfs ? "Finjustering er av. Punktene blir stående der du slipper dem." : "Finjustering er av. Hjørnene blir stående der du slipper dem.")); });
 
 /* ---------------- this device: its own ID, and a name the user may give it ---------------- */
 // The ID is made once and kept in this browser (or installed app). Saved photos go in a folder per ID.
