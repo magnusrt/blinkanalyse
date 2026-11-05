@@ -10,6 +10,8 @@ Virker på iPhone, Android og PC, også uten nett.
 - Android: åpne lenken i Chrome og trykk «Installer» (eller meny ⋮ → «Installer app»).
 
 Blinkene (A3 og A4) skrives ut fra «Skriv ut blinker» i appen. Skriv ut i 100 % størrelse.
+Appen kjenner også igjen DFS 100 m-pappskiva (uten egne merker) og gir poeng per skudd, og har et
+transparent måleark som kan legges over andre skiver.
 
 **Testbilder for feilsøking**
 Bilder som analyseres, sendes til mottakeren i `mottaker/Code.gs` (Google Apps Script) og lagres i

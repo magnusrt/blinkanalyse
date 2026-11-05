@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Blinkanalyse">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="app-version" content="beb16878">
+<meta name="app-version" content="299299c5">
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -287,6 +287,9 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
             <option value="a4l12">A4 · ladning, blink 12</option>
             <option value="a4ovl">A4 · transparent over annen skive</option>
           </optgroup>
+          <optgroup label="Andre skiver">
+            <option value="dfs100">DFS 100 m · pappskive</option>
+          </optgroup>
         </select>
         <span class="chip" id="modeChip"><span class="swatch" id="modeSwatch"></span><span id="modeText">–</span></span>
         <span class="chip" id="dbgChip" hidden></span>
@@ -360,6 +363,7 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
         <div><dt>Ring, senter–senter</dt><dd id="sRing">–</dd></div>
         <div><dt>Middelradius fra gruppesenter</dt><dd id="sMr">–</dd></div>
         <div><dt>Bredde × høyde</dt><dd id="sWh">–</dd></div>
+        <div id="sScoreRow" hidden><dt>Poeng, DFS</dt><dd id="sScore">–</dd></div>
       </dl>
       <p class="ro-note" id="roNote">Korreksjonen flytter treffpunktet til siktepunktet. Verdiene er i cm/100m, der 1 cm/100m = 0,1 mrad = 1 klikk.</p>
       </div>
@@ -403,6 +407,7 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
       <li>Kontroller de markerte hullene. Trykk for å legge til, dra for å flytte, og slett feil treff.</li>
     </ol>
     <p class="ro-note" style="margin-top:10px">Ladningstest: bruk A3-arkene med 6 blinker (ark 1 har blink 1–6, ark 2 har 7–12), A3-arket med 10 blinker, eller A4-arkene med én blink hver. Appen kjenner igjen arket på at begge hjørnemerkene øverst har hvitt hull, og leser papirstørrelse og arknummer fra koden nederst til høyre. Fyll inn «Skudd/blink» hvis hull har smeltet sammen.</p>
+    <p class="ro-note" style="margin-top:10px">DFS 100 m-pappskive: legg et blått eller grønt ark bak skiva og fotografer hele det sorte feltet rett forfra, med skivas overkant opp i bildet. Appen finner det sorte feltet og ringene selv, gir poeng per skudd (innertier merkes 10*) og regner korreksjonen som ellers. Er bildet tatt skrått eller rotert, bruk «Juster hjørner» og legg de blå sirklene oppå kanten av det sorte feltet og tieren.</p>
     <p class="ro-note" style="margin-top:10px">Annen skive: skriv ut transparenten på transparentfilm og legg den over skiva med krysset på siktepunktet. Du kan lese treffpunkt, klikk og gruppe rett av den, eller ta bilde. Appen leser da bare hull der et blått eller grønt ark bak skiva skinner gjennom, så skivas eget trykk ikke forveksles med hull. Hjørnemerkene må ligge over lyst papir, og unngå gjenskinn fra plasten.</p>
   </section>
 </div>
@@ -433,7 +438,8 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
 const T = { W: 297, H: 420, MX: 125, MY: 185, MS: 24, REF: 10, GX: 110, GY: 160, CAL: 7.82 };   // A3 zeroing sheet
 const PPM = 4;                                   // rectified pixels per mm
 // Paper sizes. A4 markers (and the sheet code) are an exact 1/√2 copy of the A3 layout.
-const PAGES = { A3: { W: 297, H: 420, MX: 125, MY: 185 }, A4: { W: 210, H: 297, MX: 125 / Math.SQRT2, MY: 185 / Math.SQRT2 } };
+const PAGES = { A3: { W: 297, H: 420, MX: 125, MY: 185 }, A4: { W: 210, H: 297, MX: 125 / Math.SQRT2, MY: 185 / Math.SQRT2 },
+  DFS: { W: 440, H: 440, MX: 150, MY: 150 } };   // DFS: no printed markers; the "markers" are four points 150 mm out, placed from the rings
 let PG = PAGES.A3, RW = Math.round(PG.W * PPM), RH = Math.round(PG.H * PPM);
 function setPage(name) { PG = PAGES[name]; RW = Math.round(PG.W * PPM); RH = Math.round(PG.H * PPM); }
 const D2R = (x, y) => ({ u: (x + PG.W / 2) * PPM, v: (PG.H / 2 - y) * PPM });
@@ -727,6 +733,140 @@ function singleSheet(paper, g, label) {
   };
   return { paper, g, label, mask, roi: [-g.GX - 3, g.GX + 3, -g.GY - 3, g.GY + 3], cellOf: () => 0, aims: [{ x: 0, y: 0 }] };
 }
+/* ---------------- DFS 100 m cardboard target ----------------
+   No corner markers: the black field (rings 7-10, Ø 240 mm) is found as an ellipse, which gives scale, aim point and
+   straightening; the ring lines then refine the centre. Scoring with an 8 mm gauge: the hole counts for a ring when its
+   centre is within the ring radius + 4 mm (inner ten 19 mm, ten 34 mm, then 30 mm per ring). */
+const DFS = { black: 120, gauge: 8, inner: 15, rings: [30, 60, 90, 120, 150, 180, 210, 240, 270, 300] };   // radii, mm: 10 … 1
+function dfsScore(x, y) {
+  const d = Math.hypot(x, y), g = DFS.gauge / 2;
+  if (d <= DFS.inner + g) return { v: 10, x: true };
+  for (let i = 0; i < DFS.rings.length; i++) if (d <= DFS.rings[i] + g) return { v: 10 - i, x: false };
+  return { v: 0, x: false };
+}
+const dfsLabel = s => (s.x ? "10*" : String(s.v));
+function dfsTotals(holes) {
+  const sc = holes.map(h => dfsScore(h.x, h.y));
+  return { scores: sc, sum: sc.reduce((a, s) => a + s.v, 0), inner: sc.filter(s => s.x).length };
+}
+// Design mm (x right, y up) -> image px through an affine frame { c, M } (M: 2x2, image px per mm)
+const dfsMap = (F, x, y) => ({ x: F.c.x + F.M[0] * x - F.M[1] * y, y: F.c.y + F.M[2] * x - F.M[3] * y });
+const dfsPts = F => [[-150, 150], [150, 150], [150, -150], [-150, -150]].map(([x, y]) => dfsMap(F, x, y));   // TL, TR, BR, BL
+function findDfs(src) {
+  const k = Math.min(1, 1400 / Math.max(src.w, src.h)), w = Math.round(src.w * k), h = Math.round(src.h * k), L = Math.max(w, h);
+  const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+  const cx = cv.getContext("2d", { willReadFrequently: true }); cx.imageSmoothingQuality = "high"; cx.drawImage(src.canvas, 0, 0, w, h);
+  const d = cx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h);
+  for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = 0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2];
+  // dark: under 45 % of the paper nearby; thin ring lines are opened away, then everything enclosed by black is filled
+  const white = localWhite(g, w, h, Math.max(10, Math.round(L / 14)));
+  let m = new Uint8Array(w * h);
+  for (let i = 0; i < m.length; i++) m[i] = white[i] > 60 && g[i] < 0.45 * white[i] ? 1 : 0;
+  m = openMask(m, w, h, Math.max(1, Math.round(L / 500)));
+  const inv = new Uint8Array(w * h); for (let i = 0; i < m.length; i++) inv[i] = m[i] ? 0 : 1;
+  const bg = labelCC(inv, w, h, false), smallMax = (L * 0.08) ** 2;
+  for (let i = 0; i < m.length; i++) { const id = bg.lab[i]; if (id) { const s = bg.stats[id - 1]; if (!s.border && s.area < smallMax) m[i] = 1; } }
+  const { stats, lab } = labelCC(m, w, h, false);
+  // the black field: big, not cut off, and an ellipse (pixels inside the moment ellipse, and the ellipse filled)
+  let best = null;
+  for (const s of stats) {
+    if (s.border || s.area < (L * 0.06) ** 2) continue;
+    const mx = s.sx / s.area, my = s.sy / s.area; let sxx = 0, syy = 0, sxy = 0;
+    for (let y = s.y0; y <= s.y1; y++) for (let x = s.x0; x <= s.x1; x++) if (lab[y * w + x] === s.id) { const dx = x - mx, dy = y - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }
+    sxx /= s.area; syy /= s.area; sxy /= s.area;
+    const tr = sxx + syy, det = sxx * syy - sxy * sxy, disc = Math.sqrt(Math.max(0, tr * tr / 4 - det));
+    const l1 = tr / 2 + disc, l2 = tr / 2 - disc; if (l2 <= 0) continue;
+    const a = 2 * Math.sqrt(l1), b = 2 * Math.sqrt(l2); if (b / a < 0.45) continue;
+    const ia = 1 / det;                                              // inside test: [dx dy] Σ^-1 [dx dy]' <= 4
+    let inside = 0;
+    for (let y = s.y0; y <= s.y1; y++) for (let x = s.x0; x <= s.x1; x++) if (lab[y * w + x] === s.id) {
+      const dx = x - mx, dy = y - my; if ((syy * dx * dx - 2 * sxy * dx * dy + sxx * dy * dy) * ia <= 4.4) inside++;
+    }
+    const eArea = Math.PI * a * b;
+    if (inside / s.area < 0.95 || inside / eArea < 0.9 || s.area / eArea > 1.1) continue;
+    if (!best || s.area > best.area) best = { area: s.area, mx, my, sxx, syy, sxy };
+  }
+  if (!best) return null;
+  // affine frame: the symmetric square root of the covariance maps the 120 mm circle onto the ellipse without turning it
+  const { sxx, syy, sxy } = best, sq = Math.sqrt(sxx * syy - sxy * sxy), t = Math.sqrt(sxx + syy + 2 * sq);
+  const r00 = (sxx + sq) / t, r01 = sxy / t, r11 = (syy + sq) / t, f = 2 / DFS.black / k;
+  let F = { c: { x: (best.mx + 0.5) / k, y: (best.my + 0.5) / k }, M: [r00 * f, r01 * f, r01 * f, r11 * f] };
+  let fit = null;
+  for (let it = 0; it < 2; it++) { const r = refineDfs(src, F); if (!r) break; F = r.F; fit = r; }
+  return { pts: dfsPts(F), frame: F, rings: fit ? fit.rings : 0, ok: true };
+}
+/* Fit circles to the ring lines in a straightened copy around the centre. Perspective moves a ring's centre by about
+   r², so the centres are extrapolated to r = 0; the radii give the scale. */
+function refineDfs(src, F) {
+  const P = 4, R0 = 140, n = 2 * R0 * P;
+  const H = solveH([[-R0, R0], [R0, R0], [R0, -R0], [-R0, -R0]], [[-R0, R0], [R0, R0], [R0, -R0], [-R0, -R0]].map(([x, y]) => { const q = dfsMap(F, x, y); return [q.x, q.y]; }));
+  const s = src.data.data, sw = src.w, sh = src.h, Y = new Float32Array(n * n), Sat = new Float32Array(n * n);
+  for (let v = 0; v < n; v++) for (let u = 0; u < n; u++) {
+    const x = -R0 + (u + 0.5) / P, y = R0 - (v + 0.5) / P, wq = H[6] * x + H[7] * y + H[8];
+    const px = Math.round((H[0] * x + H[1] * y + H[2]) / wq), py = Math.round((H[3] * x + H[4] * y + H[5]) / wq), i = v * n + u;
+    if (px < 0 || py < 0 || px >= sw || py >= sh) { Y[i] = NaN; continue; }
+    const q = (py * sw + px) * 4, r = s[q], gg = s[q + 1], b = s[q + 2], mx = Math.max(r, gg, b), mn = Math.min(r, gg, b);
+    Y[i] = 0.299 * r + 0.587 * gg + 0.114 * b; Sat[i] = mx > 0 ? (mx - mn) / mx : 0;
+  }
+  const at = (x, y) => { const u = Math.round((x + R0) * P - 0.5), v = Math.round((R0 - y) * P - 0.5); return u < 0 || v < 0 || u >= n || v >= n ? -1 : v * n + u; };
+  // white lines in the black field, its outer edge, and black lines on white
+  const kinds = [[DFS.inner, "w"], [30, "w"], [60, "w"], [90, "w"], [120, "e"], [150, "b"], [180, "b"]];
+  const fits = [];
+  for (const [R, kind] of kinds) {
+    const pts = [];
+    for (let a = 0; a < 360; a += 2) {
+      const ca = Math.cos(a * Math.PI / 180), sa = Math.sin(a * Math.PI / 180), prof = [];
+      let bad = false;
+      for (let r = R - 6; r <= R + 6.001; r += 0.25) { const i = at(r * ca, r * sa); if (i < 0 || isNaN(Y[i]) || Sat[i] > 0.35) { bad = true; break; } prof.push(Y[i]); }
+      if (bad) continue;                                             // off the picture, or a hole with the coloured sheet
+      const med = quantile(prof, 0.5);
+      let bi = -1, bv = -Infinity;
+      for (let j = 2; j < prof.length - 2; j++) {
+        const v = kind === "w" ? prof[j] - med : kind === "b" ? med - prof[j] : prof[j + 2] - prof[j - 2];
+        if (v > bv) { bv = v; bi = j; }
+      }
+      if (bi < 0 || bv < (kind === "e" ? 40 : 22)) continue;
+      let off = 0;                                                   // sub-sample peak
+      if (kind !== "e") { const y0 = prof[bi - 1], y1 = prof[bi], y2 = prof[bi + 1], den = y0 - 2 * y1 + y2; if (den) off = 0.5 * (y0 - y2) / den; }
+      const r = R - 6 + (bi + off) * 0.25;
+      pts.push([r * ca, r * sa]);
+    }
+    if (pts.length < 40) continue;
+    let P2 = pts, c = null;
+    for (let round = 0; round < 3; round++) {
+      c = fitCircle(P2); if (!c) break;
+      const res = P2.map(([x, y]) => Math.abs(Math.hypot(x - c.x, y - c.y) - c.r)), mad = quantile(res, 0.5);
+      P2 = P2.filter((_, i) => res[i] <= Math.max(0.5, 3 * mad));
+    }
+    if (c && P2.length >= 40 && Math.abs(c.r - R) < 4) fits.push({ R, x: c.x, y: c.y, r: c.r, n: P2.length });
+  }
+  if (!fits.length) return null;
+  // centre at r = 0: weighted line through the ring centres against r²
+  let c0x, c0y;
+  if (fits.length === 1) { c0x = fits[0].x; c0y = fits[0].y; }
+  else {
+    let sw0 = 0, s1 = 0, s2 = 0, sx = 0, sy = 0, sxz = 0, syz = 0;
+    for (const f of fits) { const z = f.R * f.R / 1e4, wt = f.n; sw0 += wt; s1 += wt * z; s2 += wt * z * z; sx += wt * f.x; sy += wt * f.y; sxz += wt * f.x * z; syz += wt * f.y * z; }
+    const den = sw0 * s2 - s1 * s1;
+    if (Math.abs(den) < 1e-9) { c0x = sx / sw0; c0y = sy / sw0; }
+    else { c0x = (s2 * sx - s1 * sxz) / den; c0y = (s2 * sy - s1 * syz) / den; }
+  }
+  const sc = quantile(fits.map(f => f.r / f.R), 0.5);
+  // new frame: design (x, y) -> old frame (c0 + sc·x, c0 + sc·y)
+  const M = F.M, c = dfsMap(F, c0x, c0y);
+  return { F: { c, M: M.map(v => v * sc) }, rings: fits.length, fits };
+}
+function fitCircle(P) {                                              // algebraic (Kåsa) circle fit
+  const n = P.length; if (n < 3) return null;
+  let mx = 0, my = 0; for (const [x, y] of P) { mx += x; my += y; } mx /= n; my /= n;
+  let suu = 0, svv = 0, suv = 0, suuu = 0, svvv = 0, suvv = 0, svuu = 0;
+  for (const [x, y] of P) { const u = x - mx, v = y - my; suu += u * u; svv += v * v; suv += u * v; suuu += u * u * u; svvv += v * v * v; suvv += u * v * v; svuu += v * u * u; }
+  const a = suu, b = suv, c = svv, e = (suuu + suvv) / 2, f = (svvv + svuu) / 2, det = a * c - b * b;
+  if (Math.abs(det) < 1e-12) return null;
+  const uc = (e * c - b * f) / det, vc = (a * f - b * e) / det;
+  return { x: uc + mx, y: vc + my, r: Math.sqrt(uc * uc + vc * vc + (suu + svv) / n) };
+}
+
 /* Transparency laid over any target, crosshair on its aim point. The target's own print is unknown, so holes are
    only looked for by the colour of the sheet behind the target, inside the measuring area (g = its half size). */
 function overlaySheet(paper, g, label) {
@@ -771,6 +911,8 @@ const SHEETS = {
 };
 for (let k = 1; k <= 12; k++) SHEETS["a4l" + k] = gridSheet("A4", P1A4, k - 1, `A4 · blink ${k}`);
 SHEETS.a4ovl = overlaySheet("A4", { GX: 80, GY: 112 }, "A4 · transparent");
+SHEETS.dfs100 = { paper: "DFS", g: { GX: 200, GY: 200 }, label: "DFS 100 m", dfs: true, colorOnly: true,
+  mask: (x, y) => (Math.hypot(x, y) > 205 ? 4 : 0), roi: [-205, 205, -205, 205], cellOf: () => 0, aims: [{ x: 0, y: 0 }] };
 /* Sheet code: filled 5 mm squares in the A3 frame at y = -179, bits b0..b4 at x = 88, 96, 104, 80, 72.
    b0–b3 = sheet number, b4 = A4. A4 sheets carry the same code scaled by 1/√2, so it is read in the A3 frame. */
 const CODE_X = [88, 96, 104, 80, 72];
@@ -921,7 +1063,13 @@ function detectHoles(A, backingIn, forceDark, expected) {
     let m = new Uint8Array(N), minA, A1def;
     if (bk) {
       const nearOrange = hueDist(bk.h, 25) < 40, sMin = Math.max(0.16, 0.45 * bk.s);
-      for (let i = 0; i < N; i++) m[i] = (tm[i] !== 4 && S[i] >= sMin && V[i] >= 0.08 && hueDist(H[i], bk.h) <= 26 && !(nearOrange && tm[i] === 2)) ? 1 : 0;
+      // on another target's black print, colour from the hole bleeds into the dark edge (JPEG): ask for half the sheet's brightness
+      let vMin = 0.08;
+      if (A.sheet.colorOnly) {                                           // the sheet's brightness from the holes' bright cores, not their dark edges
+        const vv = []; for (let i = 0; i < N; i += 2) if (tm[i] !== 4 && S[i] >= sMin && hueDist(H[i], bk.h) <= 26 && V[i] >= 0.08) vv.push(V[i]);
+        vMin = Math.max(0.08, 0.5 * (vv.length > 20 ? quantile(vv, 0.85) : bk.v));
+      }
+      for (let i = 0; i < N; i++) m[i] = (tm[i] !== 4 && S[i] >= sMin && V[i] >= vMin && hueDist(H[i], bk.h) <= 26 && !(nearOrange && tm[i] === 2)) ? 1 : 0;
       m = openMask(m, w, h, 1); minA = 6 * PPM * PPM; A1def = 36 * PPM * PPM;
     } else {
       const bw = Math.ceil(w / 4), bh = Math.ceil(h / 4), Bm = new Float32Array(bw * bh), Bc = new Float32Array(bw * bh);
@@ -1224,7 +1372,7 @@ const state = {
   src: null, markers: null, markersEdit: null, rect: null, A: null, det: null, holes: [], selected: -1,
   backingManual: null, pick: false, sample: true, view: "holes", zoomedGroup: false, shots: 0,
   sheet: "single", sheetAuto: true, snap: true, loads: Array(12).fill(""),
-  dist: 100, cals: { A3: { h: 250, v: 370 }, A4: { h: 176.8, v: 261.6 } }, cal: null, refs: null
+  dist: 100, cals: { A3: { h: 250, v: 370 }, A4: { h: 176.8, v: 261.6 }, DFS: { h: 300, v: 300 } }, cal: null, refs: null
 };
 const store = {
   get(k, d) { try { const v = localStorage.getItem("blinkanalyse." + k); return v === null ? d : JSON.parse(v); } catch (_) { return d; } },
@@ -1360,6 +1508,13 @@ const holeHooks = {
       const col = v.diff && h.src === "manual" ? "#16A34A" : "#ff2d95";
       ctx.lineWidth = (sel ? 2.5 : 1.8) * L; ctx.strokeStyle = col; ctx.stroke();
       ctx.fillStyle = col; ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(1.5 * L, Math.min(3 * L, r * 0.12)), 0, Math.PI * 2); ctx.fill();
+      if (sheet.dfs) {                                                    // the hole's value
+        const t = dfsLabel(dfsScore(h.x, h.y)), fs = Math.min(15 * L, Math.max(10 * L, r * 0.5));
+        ctx.font = `700 ${fs}px ${css("--f-data") || "monospace"}`; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+        const tx = p.x + r * 0.75, ty = p.y - r * 0.85, tw = ctx.measureText(t).width;
+        ctx.fillStyle = "rgba(10,12,11,.82)"; ctx.fillRect(tx - 2 * L, ty - fs * 0.62, tw + 4 * L, fs * 1.24);
+        ctx.fillStyle = "#FFD60A"; ctx.fillText(t, tx, ty); ctx.textBaseline = "alphabetic";
+      }
     });
     if (v.diff && v.diff.removed) for (const [x, y] of v.diff.removed) {    // holes you deleted
       const p = S(x, y), k = r * 0.7;
@@ -1422,7 +1577,7 @@ const markerHooks = {
   itemPos(i) { return state.markersEdit[i]; },
   drag(i, x, y) { state.markersEdit[i] = { x: clamp(x, 0, state.src.w), y: clamp(y, 0, state.src.h) }; },
   dragEnd(i) {
-    if (state.snap && i >= 0) {
+    if (state.snap && i >= 0 && !SHEETS[state.sheet].dfs) {             // the DFS frame has no printed markers to snap to
       const r = refineMarker(state.markersEdit[i].x, state.markersEdit[i].y, state.markersEdit);
       if (r) { state.markersEdit[i] = r; setStatus(`Hjørnet ${MARK_LABELS[i]} er finjustert til midten av hjørnemerket.`); }
       else setStatus(`Fant ikke noe hjørnemerke der hjørnet ${MARK_LABELS[i]} ble sluppet, så det står der du slapp det.`, true);
@@ -1518,6 +1673,15 @@ function drawCenterGuide(ctx, v) {
   if (!H) return;
   const S = (x, y) => { const [px, py] = applyH(H, x, y); return v.toS(px, py); };
   const r = sh.multi ? sh.p.dr : sh.overlay ? 10 : 32, arm = r * 1.25, GUIDE = "#22D3EE";
+  if (sh.dfs) {                                                           // the black field's edge and the ten, as they should lie
+    for (const [w, col] of [[4, "rgba(0,0,0,.55)"], [1.8, GUIDE]]) {
+      ctx.lineWidth = w; ctx.strokeStyle = col;
+      for (const R of [DFS.black, 30]) { ctx.beginPath(); for (let a = 0; a <= 360; a += 6) { const q = S(R * Math.cos(a * Math.PI / 180), R * Math.sin(a * Math.PI / 180)); a ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); } ctx.stroke(); }
+      const h0 = S(-150, 0), h1 = S(150, 0), v0 = S(0, -150), v1 = S(0, 150);
+      ctx.beginPath(); ctx.moveTo(h0.x, h0.y); ctx.lineTo(h1.x, h1.y); ctx.moveTo(v0.x, v0.y); ctx.lineTo(v1.x, v1.y); ctx.stroke();
+    }
+    return;
+  }
   for (const a of sh.aims) {
     const d = [[a.x + r, a.y], [a.x, a.y + r], [a.x - r, a.y], [a.x, a.y - r]].map(q => S(q[0], q[1]));
     const h0 = S(a.x - arm, a.y), h1 = S(a.x + arm, a.y), v0 = S(a.x, a.y - arm), v1 = S(a.x, a.y + arm), c = S(a.x, a.y);
@@ -1648,8 +1812,10 @@ function updateReadout() {
   $("roLoad").hidden = !load; $("roSingle").hidden = load;
   dbgTouch();
   if (load) { $("roSub").textContent = `${SHEETS[state.sheet].label} · ${fmt(d, 0)} m · ${state.holes.length} hull på arket`; updateLoadTable(); viewer.req(); return; }
-  const st = computeStats(state.holes, state.cal);
+  const st = computeStats(state.holes, state.cal), isDfs = !!SHEETS[state.sheet].dfs;
   $("roSub").textContent = `${fmt(d, 0)} m · 1 klikk = 0,1 mrad = ${fmt(d / 100, 1)} cm på blinken`;
+  $("sScoreRow").hidden = !isDfs;
+  if (isDfs) { const t = dfsTotals(state.holes); $("sScore").innerHTML = state.holes.length ? `${t.sum} poeng · ${t.inner} ${t.inner === 1 ? "innertier" : "innertiere"}<small>${t.scores.map(dfsLabel).join(" · ")}</small>` : "–"; }
   $("sN").textContent = st.n || 0;
   renderGrade(gradeOf(st));
   if (!st.n) {
@@ -1686,7 +1852,8 @@ function setSheet(sheet) {
   state.sheet = sheet; $("sheetSel").value = sheet;
   const paper = SHEETS[sheet].paper; setPage(paper);
   state.cal = state.cals[paper]; $("calH").value = state.cal.h; $("calV").value = state.cal.v;
-  $("calNote").textContent = paper === "A4" ? "176,8 og 261,6 mm (A4)" : "250 og 370 mm (A3)";
+  $("calNote").textContent = paper === "A4" ? "176,8 og 261,6 mm (A4)" : paper === "DFS" ? "– (ikke i bruk: på DFS-skiva gir ringene målestokken)" : "250 og 370 mm (A3)";
+  $("calH").disabled = $("calV").disabled = paper === "DFS";
   $("shotsLbl").textContent = SHEETS[sheet].multi ? "Skudd/blink" : "Skudd";
   if (changed || !$("ltBody").children.length) buildLoadTable();
 }
@@ -1700,8 +1867,9 @@ function enterMarkers(msg) {
   state.view = "markers"; viewer.h = markerHooks;
   state.markersEdit = (state.markers || defaultMarkers()).map(p => ({ ...p }));
   updateGuideSheet();
-  $("toolsHoles").hidden = true; $("toolsMarkers").hidden = false;
-  setHint(state.snap ? "Dra hvert merke inn på hjørnefeltet, så finjusteres det til midten. Det blå krysset skal ligge oppå siktepunktet."
+  $("toolsHoles").hidden = true; $("toolsMarkers").hidden = false; $("bSnapM").hidden = !!SHEETS[state.sheet].dfs;
+  setHint(SHEETS[state.sheet].dfs ? "Dra hjørnene til de blå sirklene ligger oppå kanten av det sorte feltet og tieren."
+    : state.snap ? "Dra hvert merke inn på hjørnefeltet, så finjusteres det til midten. Det blå krysset skal ligge oppå siktepunktet."
     : "Dra hvert merke til midten av hjørnefeltet. Det blå krysset skal ligge oppå siktepunktet.");
   viewer.setSource(state.src.canvas, state.src.w, state.src.h, 10);
   viewer.fit(0, 0, state.src.w, state.src.h);
@@ -1709,6 +1877,7 @@ function enterMarkers(msg) {
 }
 function defaultMarkers() {
   const w = state.src.w, h = state.src.h, mx = w * 0.12, my = h * 0.1;
+  if (SHEETS[state.sheet].dfs) { const r = Math.min(w, h) * 0.3; return [{ x: w / 2 - r, y: h / 2 - r }, { x: w / 2 + r, y: h / 2 - r }, { x: w / 2 + r, y: h / 2 + r }, { x: w / 2 - r, y: h / 2 + r }]; }
   return [{ x: mx, y: my }, { x: w - mx, y: my }, { x: w - mx, y: h - my }, { x: mx, y: h - my }];
 }
 function redetect() {
@@ -1740,8 +1909,16 @@ async function analyse() {
 }
 async function changeSheet(sheet) {
   if (sheet === state.sheet) return;
-  const paperChanged = SHEETS[sheet].paper !== SHEETS[state.sheet].paper;
+  const paperChanged = SHEETS[sheet].paper !== SHEETS[state.sheet].paper, wasDfs = !!SHEETS[state.sheet].dfs;
   state.sheetAuto = false; setSheet(sheet);
+  if (state.src && !state.sample && (SHEETS[sheet].dfs || wasDfs)) {      // the frame comes from the rings, or from the markers
+    setBusy(SHEETS[sheet].dfs ? "Leter etter DFS-skiva…" : "Finner hjørnemerkene…"); await frame();
+    const f = SHEETS[sheet].dfs ? findDfs(state.src) : findMarkers(state.src);
+    if (f && f.ok !== false) { state.markers = f.pts; if (!SHEETS[sheet].dfs) state.refs = f.refs; await analyse(); return; }
+    state.markers = null; setBusy(null);
+    enterMarkers(SHEETS[sheet].dfs ? "Fant ikke det sorte feltet. Dra hjørnene til de blå sirklene ligger oppå skivas ringer." : "Fant ikke alle fire hjørnemerkene. Dra merkene på plass.");
+    return;
+  }
   if (!state.rect || !state.markers) { updateReadout(); return; }
   if (paperChanged) { await analyse(); return; }
   setBusy("Leter etter hull…"); await frame();
@@ -1752,9 +1929,21 @@ async function processSource(src, isSample) {
   state.src = src; state.backingManual = null; state.pick = false; state.holes = []; state.selected = -1; markSample(isSample);
   if (isSample) dbgStop();
   setBusy("Finner hjørnemerkene…"); await frame();
-  const m = findMarkers(src);
+  const wantDfs = state.sheet === "dfs100" && !state.sheetAuto && !isSample;
+  let m = wantDfs ? null : findMarkers(src);
+  if (!isSample && (!m || !m.ok)) {                                        // no corner markers: perhaps a DFS target
+    setBusy("Leter etter DFS-skiva…"); await frame();
+    const dfs = findDfs(src);
+    if (dfs) {
+      if (DBG.cur) DBG.cur.autoMarkers = { pts: ptsOut(dfs.pts), sheet: "dfs100", refs: 0, ok: true, rings: dfs.rings };
+      state.markers = dfs.pts; state.refs = 0; state.sheetAuto = false; setSheet("dfs100");
+      await analyse(); return;
+    }
+    if (wantDfs) { state.markers = null; setBusy(null); enterMarkers("Fant ikke det sorte feltet på DFS-skiva. Dra hjørnene til de blå sirklene ligger oppå skivas ringer, eller ta et nytt bilde rett forfra."); return; }
+    if (!m) m = findMarkers(src);
+  }
   if (!isSample && DBG.cur) DBG.cur.autoMarkers = m ? { pts: ptsOut(m.pts), sheet: m.sheet, refs: m.refs, ok: m.ok } : null;
-  if (!m) { state.markers = null; setBusy(null); enterMarkers("Fant ikke alle fire hjørnemerkene. Dra merkene på plass, eller ta et nytt bilde med hele arket i bildet."); return; }
+  if (!m) { state.markers = null; if (SHEETS[state.sheet].dfs) { state.sheetAuto = true; setSheet("single"); } setBusy(null); enterMarkers("Fant ikke alle fire hjørnemerkene. Dra merkene på plass, eller ta et nytt bilde med hele arket i bildet."); return; }
   state.markers = m.pts; state.refs = m.refs; state.sheetAuto = true; setSheet(m.sheet);
   if (!m.ok) { setBusy(null); enterMarkers(m.refs === 0 ? "Fant ikke REF-merket. Kontroller at merket med hvitt hull er øverst til venstre." : "Kontroller at hjørnemerkene sitter riktig."); return; }
   await analyse();
@@ -1770,7 +1959,8 @@ const IMG = { bg: "#FFFFFF", ink: "#151916", muted: "#59625B", line: "#D5D9D4", 
 function rrect(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
 function buildReport(opts = {}) {
   const sh = SHEETS[state.sheet], multi = !!sh.multi;
-  const [x0, x1, y0, y1] = multi ? [sh.p.x0 - 3, sh.p.x1 + 3, sh.p.y0 - 0.8, sh.p.y1 + 0.8] : [-sh.g.GX - 8, sh.g.GX + 8, -sh.g.GY - 6, sh.g.GY + 6];
+  const dfsHalf = sh.dfs ? clamp(Math.max(60, ...state.holes.map(h => Math.max(Math.abs(h.x), Math.abs(h.y)) + 25)), 60, 205) : 0;   // aim point and shots, at least ±6 cm
+  const [x0, x1, y0, y1] = multi ? [sh.p.x0 - 3, sh.p.x1 + 3, sh.p.y0 - 0.8, sh.p.y1 + 0.8] : sh.dfs ? [-dfsHalf, dfsHalf, -dfsHalf, dfsHalf] : [-sh.g.GX - 8, sh.g.GX + 8, -sh.g.GY - 6, sh.g.GY + 6];
   const m = state.markers, srcPPM = Math.hypot(m[1].x - m[0].x, m[1].y - m[0].y) / (2 * PG.MX);
   const ppmR = Math.max(4, Math.min((opts.maxW || 1500) / (x1 - x0), srcPPM * 1.1));
   const tgt = rectifyRegion(state.src, m, x0, x1, y0, y1, ppmR).canvas;
@@ -1852,6 +2042,7 @@ function buildReport(opts = {}) {
       }
       const mx = st.mx / 10, my = st.my / 10, two = cm => `${fmt(cm)} cm  ·  ${fmt(cm * k)} cm/100m`;
       row("Skudd", String(st.n));
+      if (sh.dfs) { const t = dfsTotals(state.holes); row("Poeng, DFS", `${t.sum} poeng  ·  ${t.inner} ${t.inner === 1 ? "innertier" : "innertiere"}`, t.scores.map(dfsLabel).join("  ")); }
       row("Treffpunkt på blinken", `${fmt(Math.abs(mx))} cm ${mx >= 0 ? "høyre" : "venstre"}  ·  ${fmt(Math.abs(my))} cm ${my >= 0 ? "høyt" : "lavt"}`);
       if (st.n >= 2) { row("Spredning, senter–senter", two(st.es / 10)); row("Ring, senter–senter", two(st.ringD / 10)); row("Middelradius fra gruppesenter", two(st.mr / 10)); row("Bredde × høyde", `${fmt(st.wdt / 10)} × ${fmt(st.hgt / 10)} cm`); }
       text("1 klikk = 0,1 mrad = 1 cm/100m. Korreksjonen flytter treffpunktet til siktepunktet.", PAD, y - 10 * U, F(400, 24), IMG.muted);
@@ -2324,7 +2515,7 @@ function dbgRecord(cur) {
   const res = st => ({ n: st.n, es: r3(st.es || 0), mr: r3(st.mr || 0), ring: r3(st.ringD || 0), mx: r3(st.mx || 0), my: r3(st.my || 0) });
   let results;
   if (sh.multi) results = loadRows().map((st, i) => ({ nr: sh.offset + i + 1, ...res(st) })).filter(r => r.n);
-  else { const st = computeStats(state.holes, state.cal); results = st.n ? [{ nr: 1, ...res(st) }] : []; }
+  else { const st = computeStats(state.holes, state.cal); results = st.n ? [{ nr: 1, ...res(st), ...(sh.dfs ? { dfs: (t => ({ sum: t.sum, inner: t.inner, scores: t.scores.map(dfsLabel) }))(dfsTotals(state.holes)) } : {}) }] : []; }
   const am = cur.autoMarkers && cur.autoMarkers.pts;
   const markersEdited = !!(am && state.markers && state.markers.some((p, i) => Math.hypot(p.x - am[i][0], p.y - am[i][1]) > 1));
   return {
@@ -2446,7 +2637,7 @@ shotsEl.addEventListener("input", () => {
 state.shots = store.get("shots", 0); if (state.shots) shotsEl.value = state.shots;
 state.dist = store.get("dist", 100); distEl.value = state.dist;
 const savedCals = store.get("cals", null), oldCal = store.get("cal", null);
-if (savedCals && savedCals.A3 && savedCals.A4) state.cals = savedCals;
+if (savedCals && savedCals.A3 && savedCals.A4) state.cals = { ...savedCals, DFS: { h: 300, v: 300 } };
 else if (oldCal && oldCal.h && oldCal.v) state.cals.A3 = oldCal;
 state.cal = state.cals.A3;
 const refEls = { name: $("refName"), t1: $("refT1"), t2: $("refT2"), t3: $("refT3") };
@@ -2461,7 +2652,7 @@ const savedLoads = store.get("loads", null);
 if (Array.isArray(savedLoads)) state.loads = Array.from({ length: 12 }, (_, i) => String(savedLoads[i] || ""));
 buildLoadTable();
 
-window.__ba = { viewer, refineHole, refineMarker, enclosingCircle, buildReport, enterMarkers, state, T, PPM, findMarkers, findMarkersGray, rectify, analyseRect, detectHoles, computeStats, processSource, sourceFromCanvas, SAMPLE_TRUTH, makeSamplePhoto };
+window.__ba = { viewer, refineHole, refineMarker, findDfs, dfsScore, enclosingCircle, buildReport, enterMarkers, state, T, PPM, findMarkers, findMarkersGray, rectify, analyseRect, detectHoles, computeStats, processSource, sourceFromCanvas, SAMPLE_TRUTH, makeSamplePhoto };
 
 (async () => {
   await frame();
