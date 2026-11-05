@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Blinkanalyse">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="app-version" content="984311bf">
+<meta name="app-version" content="dee12e06">
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -407,7 +407,7 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
       <li>Kontroller de markerte hullene. Trykk for å legge til, dra for å flytte, og slett feil treff.</li>
     </ol>
     <p class="ro-note" style="margin-top:10px">Ladningstest: bruk A3-arkene med 6 blinker (ark 1 har blink 1–6, ark 2 har 7–12), A3-arket med 10 blinker, eller A4-arkene med én blink hver. Appen kjenner igjen arket på at begge hjørnemerkene øverst har hvitt hull, og leser papirstørrelse og arknummer fra koden nederst til høyre. Fyll inn «Skudd/blink» hvis hull har smeltet sammen.</p>
-    <p class="ro-note" style="margin-top:10px">DFS 100 m-pappskive: legg et blått eller grønt ark bak skiva og fotografer hele det sorte feltet rett forfra, med skivas overkant opp i bildet. Appen finner det sorte feltet og ringene selv, gir poeng per skudd (innertier merkes 10*) og regner korreksjonen som ellers. Er bildet tatt skrått eller rotert, bruk «Juster hjørner» og legg de blå sirklene oppå ytterringen og kanten av det sorte feltet, med prikken midt i skiva.</p>
+    <p class="ro-note" style="margin-top:10px">DFS 100 m-pappskive: legg et blått eller grønt ark bak skiva og fotografer hele det sorte feltet rett forfra, med skivas overkant opp i bildet. Appen finner det sorte feltet og ringene selv, gir poeng per skudd (innertier merkes 10*) og regner korreksjonen som ellers. Stemmer det ikke, bruk «Juster hjørner» og dra de fire punktene ut på ytterringen der den krysser aksene, ved de fire «1»-tallene.</p>
     <p class="ro-note" style="margin-top:10px">Annen skive: skriv ut transparenten på transparentfilm og legg den over skiva med krysset på siktepunktet. Du kan lese treffpunkt, klikk og gruppe rett av den, eller ta bilde. Appen leser da bare hull der et blått eller grønt ark bak skiva skinner gjennom, så skivas eget trykk ikke forveksles med hull. Hjørnemerkene må ligge over lyst papir, og unngå gjenskinn fra plasten.</p>
   </section>
 </div>
@@ -439,12 +439,13 @@ const T = { W: 297, H: 420, MX: 125, MY: 185, MS: 24, REF: 10, GX: 110, GY: 160,
 const PPM = 4;                                   // rectified pixels per mm
 // Paper sizes. A4 markers (and the sheet code) are an exact 1/√2 copy of the A3 layout.
 const PAGES = { A3: { W: 297, H: 420, MX: 125, MY: 185 }, A4: { W: 210, H: 297, MX: 125 / Math.SQRT2, MY: 185 / Math.SQRT2 },
-  DFS: { W: 440, H: 440, MX: 150, MY: 150 } };   // DFS: no printed markers; the "markers" are four points 150 mm out, placed from the rings
+  DFS: { W: 440, H: 440, MX: 150, MY: 150, pts: [[0, 300], [300, 0], [0, -300], [-300, 0]] } };   // DFS: no printed markers; the references are where ring 1 crosses the axes
 let PG = PAGES.A3, RW = Math.round(PG.W * PPM), RH = Math.round(PG.H * PPM);
 function setPage(name) { PG = PAGES[name]; RW = Math.round(PG.W * PPM); RH = Math.round(PG.H * PPM); }
 const D2R = (x, y) => ({ u: (x + PG.W / 2) * PPM, v: (PG.H / 2 - y) * PPM });
 const R2D = (u, v) => ({ x: u / PPM - PG.W / 2, y: PG.H / 2 - v / PPM });
-const markersD = () => [[-PG.MX, PG.MY], [PG.MX, PG.MY], [PG.MX, -PG.MY], [-PG.MX, -PG.MY]]; // TL, TR, BR, BL
+const pagePts = P => P.pts || [[-P.MX, P.MY], [P.MX, P.MY], [P.MX, -P.MY], [-P.MX, -P.MY]];   // TL, TR, BR, BL (DFS: top, right, bottom, left)
+const markersD = () => pagePts(PG);
 const MARKERS_D = [[-T.MX, T.MY], [T.MX, T.MY], [T.MX, -T.MY], [-T.MX, -T.MY]];               // A3 frame
 
 /* ---------------- small math ---------------- */
@@ -749,9 +750,9 @@ function dfsTotals(holes) {
   const sc = holes.map(h => dfsScore(h.x, h.y));
   return { scores: sc, sum: sc.reduce((a, s) => a + s.v, 0), inner: sc.filter(s => s.x).length };
 }
-// Design mm (x right, y up) -> image px through an affine frame { c, M } (M: 2x2, image px per mm)
-const dfsMap = (F, x, y) => ({ x: F.c.x + F.M[0] * x - F.M[1] * y, y: F.c.y + F.M[2] * x - F.M[3] * y });
-const dfsPts = F => [[-150, 150], [150, 150], [150, -150], [-150, -150]].map(([x, y]) => dfsMap(F, x, y));   // TL, TR, BR, BL
+// Reference points: where ring 1 crosses the axes, by the four "1"s (top, right, bottom, left).
+const DFS_AXES = [[0, 300], [300, 0], [0, -300], [-300, 0]];
+const mul3 = (a, b) => [0, 1, 2].flatMap(r => [0, 1, 2].map(c => a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c]));
 function findDfs(src) {
   const k = Math.min(1, 1400 / Math.max(src.w, src.h)), w = Math.round(src.w * k), h = Math.round(src.h * k), L = Math.max(w, h);
   const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
@@ -787,84 +788,120 @@ function findDfs(src) {
     if (!best || s.area > best.area) best = { area: s.area, mx, my, sxx, syy, sxy };
   }
   if (!best) return null;
-  // affine frame: the symmetric square root of the covariance maps the 120 mm circle onto the ellipse without turning it
+  // first guess (affine): the symmetric square root of the covariance maps the 120 mm circle onto the ellipse without turning it
   const { sxx, syy, sxy } = best, sq = Math.sqrt(sxx * syy - sxy * sxy), t = Math.sqrt(sxx + syy + 2 * sq);
-  const r00 = (sxx + sq) / t, r01 = sxy / t, r11 = (syy + sq) / t, f = 2 / DFS.black / k;
-  let F = { c: { x: (best.mx + 0.5) / k, y: (best.my + 0.5) / k }, M: [r00 * f, r01 * f, r01 * f, r11 * f] };
-  let fit = null;
-  for (let it = 0; it < 2; it++) { const r = refineDfs(src, F); if (!r) break; F = r.F; fit = r; }
-  return { pts: dfsPts(F), frame: F, rings: fit ? fit.rings : 0, ok: true };
-}
-/* Fit circles to the ring lines in a straightened copy around the centre. Perspective moves a ring's centre by about
-   r², so the centres are extrapolated to r = 0; the radii give the scale. */
-function refineDfs(src, F) {
-  const P = 4, R0 = 140, n = 2 * R0 * P;
-  const H = solveH([[-R0, R0], [R0, R0], [R0, -R0], [-R0, -R0]], [[-R0, R0], [R0, R0], [R0, -R0], [-R0, -R0]].map(([x, y]) => { const q = dfsMap(F, x, y); return [q.x, q.y]; }));
-  const s = src.data.data, sw = src.w, sh = src.h, Y = new Float32Array(n * n), Sat = new Float32Array(n * n);
-  for (let v = 0; v < n; v++) for (let u = 0; u < n; u++) {
-    const x = -R0 + (u + 0.5) / P, y = R0 - (v + 0.5) / P, wq = H[6] * x + H[7] * y + H[8];
-    const px = Math.round((H[0] * x + H[1] * y + H[2]) / wq), py = Math.round((H[3] * x + H[4] * y + H[5]) / wq), i = v * n + u;
-    if (px < 0 || py < 0 || px >= sw || py >= sh) { Y[i] = NaN; continue; }
-    const q = (py * sw + px) * 4, r = s[q], gg = s[q + 1], b = s[q + 2], mx = Math.max(r, gg, b), mn = Math.min(r, gg, b);
-    Y[i] = 0.299 * r + 0.587 * gg + 0.114 * b; Sat[i] = mx > 0 ? (mx - mn) / mx : 0;
+  const f = 2 / DFS.black / k, m00 = (sxx + sq) / t * f, m01 = sxy / t * f, m11 = (syy + sq) / t * f;
+  let H = [m00, -m01, (best.mx + 0.5) / k, m01, -m11, (best.my + 0.5) / k, 0, 0, 1];   // design mm (y up) -> image px
+  // then the rings, from the inside out: two or more circles of different size fix centre, scale and perspective
+  const S = dfsSampler(src);
+  const ALL = [[DFS.inner, "w"], [30, "w"], [60, "w"], [90, "w"], [120, "e"], [150, "b"], [180, "b"], [210, "b"], [240, "b"], [270, "b"], [300, "b"]];
+  let used = 0, outer = 0;
+  for (const [maxR, win] of [[150, 6], [210, 6], [300, 6], [300, 3.5]]) {
+    const obs = dfsRingPoints(S, H, ALL.filter(([R]) => R <= maxR), win);
+    if (obs.rings < 2) { if (maxR === 150) return { pts: DFS_AXES.map(([x, y]) => (q => ({ x: q[0], y: q[1] }))(applyH(H, x, y))), H, rings: obs.rings, roll: 0, ok: true }; break; }
+    const Hn = dfsFitH(H, obs.pts); if (!Hn) break;
+    H = Hn; used = obs.rings; outer = obs.maxR;
   }
-  const at = (x, y) => { const u = Math.round((x + R0) * P - 0.5), v = Math.round((R0 - y) * P - 0.5); return u < 0 || v < 0 || u >= n || v >= n ? -1 : v * n + u; };
-  // white lines in the black field, its outer edge, and black lines on white
-  const kinds = [[DFS.inner, "w"], [30, "w"], [60, "w"], [90, "w"], [120, "e"], [150, "b"], [180, "b"]];
-  const fits = [];
-  for (const [R, kind] of kinds) {
-    const pts = [];
+  // which way is up: the ring numbers sit on the axes
+  const roll = dfsRoll(S, H);
+  if (roll) { const c = Math.cos(roll), sn = Math.sin(roll); H = mul3(H, [c, -sn, 0, sn, c, 0, 0, 0, 1]); }
+  return { pts: DFS_AXES.map(([x, y]) => (q => ({ x: q[0], y: q[1] }))(applyH(H, x, y))), H, rings: used, outer, roll: roll * 180 / Math.PI, ok: true };
+}
+function dfsSampler(src) {                                           // bilinear luminance and saturation at image px
+  const s = src.data.data, W = src.w, Hh = src.h;
+  return {
+    at(u, v) {
+      const x0 = Math.floor(u - 0.5), y0 = Math.floor(v - 0.5);
+      if (x0 < 0 || y0 < 0 || x0 >= W - 1 || y0 >= Hh - 1) return null;
+      const fx = u - 0.5 - x0, fy = v - 0.5 - y0, i = (y0 * W + x0) * 4, j = i + W * 4;
+      const ch = c => (s[i + c] * (1 - fx) + s[i + 4 + c] * fx) * (1 - fy) + (s[j + c] * (1 - fx) + s[j + 4 + c] * fx) * fy;
+      const r = ch(0), g = ch(1), b = ch(2), mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+      return { y: 0.299 * r + 0.587 * g + 0.114 * b, sat: mx > 0 ? (mx - mn) / mx : 0 };
+    }
+  };
+}
+// Points on the ring lines in the image, found along rays from the centre through the current frame H.
+function dfsRingPoints(S, H, rings, win) {
+  const pts = []; let n = 0, maxR = 0;
+  for (const [R, kind] of rings) {
+    const found = [];
     for (let a = 0; a < 360; a += 2) {
       const ca = Math.cos(a * Math.PI / 180), sa = Math.sin(a * Math.PI / 180), prof = [];
       let bad = false;
-      for (let r = R - 6; r <= R + 6.001; r += 0.25) { const i = at(r * ca, r * sa); if (i < 0 || isNaN(Y[i]) || Sat[i] > 0.35) { bad = true; break; } prof.push(Y[i]); }
-      if (bad) continue;                                             // off the picture, or a hole with the coloured sheet
+      for (let r = R - win; r <= R + win + 1e-6; r += 0.25) {
+        const [u, v] = applyH(H, r * ca, r * sa), q = S.at(u, v);
+        if (!q || q.sat > 0.35) { bad = true; break; }                // off the picture, or a hole with the coloured sheet
+        prof.push(q.y);
+      }
+      if (bad) continue;
       const med = quantile(prof, 0.5);
       let bi = -1, bv = -Infinity;
       for (let j = 2; j < prof.length - 2; j++) {
         const v = kind === "w" ? prof[j] - med : kind === "b" ? med - prof[j] : prof[j + 2] - prof[j - 2];
         if (v > bv) { bv = v; bi = j; }
       }
-      if (bi < 0 || bv < (kind === "e" ? 40 : 22)) continue;
-      let off = 0;                                                   // sub-sample peak
-      if (kind !== "e") { const y0 = prof[bi - 1], y1 = prof[bi], y2 = prof[bi + 1], den = y0 - 2 * y1 + y2; if (den) off = 0.5 * (y0 - y2) / den; }
-      const r = R - 6 + (bi + off) * 0.25;
-      pts.push([r * ca, r * sa]);
+      if (bi < 0 || bv < (kind === "e" ? 40 : 18)) continue;
+      let off = 0;
+      if (kind !== "e") { const y0 = prof[bi - 1], y1 = prof[bi], y2 = prof[bi + 1], den = y0 - 2 * y1 + y2; if (den) off = clamp(0.5 * (y0 - y2) / den, -1, 1); }
+      const r = R - win + (bi + off) * 0.25, [u, v] = applyH(H, r * ca, r * sa);
+      found.push({ u, v, R });
     }
-    if (pts.length < 40) continue;
-    let P2 = pts, c = null;
-    for (let round = 0; round < 3; round++) {
-      c = fitCircle(P2); if (!c) break;
-      const res = P2.map(([x, y]) => Math.abs(Math.hypot(x - c.x, y - c.y) - c.r)), mad = quantile(res, 0.5);
-      P2 = P2.filter((_, i) => res[i] <= Math.max(0.5, 3 * mad));
-    }
-    if (c && P2.length >= 40 && Math.abs(c.r - R) < 4) fits.push({ R, x: c.x, y: c.y, r: c.r, n: P2.length });
+    if (found.length >= 30) { pts.push(...found); n++; maxR = Math.max(maxR, R); }
   }
-  if (!fits.length) return null;
-  // centre at r = 0: weighted line through the ring centres against r²
-  let c0x, c0y;
-  if (fits.length === 1) { c0x = fits[0].x; c0y = fits[0].y; }
-  else {
-    let sw0 = 0, s1 = 0, s2 = 0, sx = 0, sy = 0, sxz = 0, syz = 0;
-    for (const f of fits) { const z = f.R * f.R / 1e4, wt = f.n; sw0 += wt; s1 += wt * z; s2 += wt * z * z; sx += wt * f.x; sy += wt * f.y; sxz += wt * f.x * z; syz += wt * f.y * z; }
-    const den = sw0 * s2 - s1 * s1;
-    if (Math.abs(den) < 1e-9) { c0x = sx / sw0; c0y = sy / sw0; }
-    else { c0x = (s2 * sx - s1 * sxz) / den; c0y = (s2 * sy - s1 * syz) / den; }
-  }
-  const sc = quantile(fits.map(f => f.r / f.R), 0.5);
-  // new frame: design (x, y) -> old frame (c0 + sc·x, c0 + sc·y)
-  const M = F.M, c = dfsMap(F, c0x, c0y);
-  return { F: { c, M: M.map(v => v * sc) }, rings: fits.length, fits };
+  return { pts, rings: n, maxR };
 }
-function fitCircle(P) {                                              // algebraic (Kåsa) circle fit
-  const n = P.length; if (n < 3) return null;
-  let mx = 0, my = 0; for (const [x, y] of P) { mx += x; my += y; } mx /= n; my /= n;
-  let suu = 0, svv = 0, suv = 0, suuu = 0, svvv = 0, suvv = 0, svuu = 0;
-  for (const [x, y] of P) { const u = x - mx, v = y - my; suu += u * u; svv += v * v; suv += u * v; suuu += u * u * u; svvv += v * v * v; suvv += u * v * v; svuu += v * u * u; }
-  const a = suu, b = suv, c = svv, e = (suuu + suvv) / 2, f = (svvv + svuu) / 2, det = a * c - b * b;
-  if (Math.abs(det) < 1e-12) return null;
-  const uc = (e * c - b * f) / det, vc = (a * f - b * e) / det;
-  return { x: uc + mx, y: vc + my, r: Math.sqrt(uc * uc + vc * vc + (suu + svv) / n) };
+/* Homography from concentric rings: find the correction D (near identity, design -> design) so that every observed point
+   lies at its ring's radius, |D(H^-1 q)| = R. Rotation about the centre does not change this, so damping keeps it as it was. */
+function dfsFitH(H, pts) {
+  const Hi = inv3(H); if (!Hi) return null;
+  let P = pts.map(o => { const [x, y] = applyH(Hi, o.u, o.v); return { x, y, R: o.R }; });
+  const Dof = p => [1 + p[0], p[1], 10 * p[2], p[3], 1 + p[4], 10 * p[5], p[6] / 300, p[7] / 300, 1];
+  const res = (p, Q) => { const D = Dof(p); return Q.map(o => { const [x, y] = applyH(D, o.x, o.y); return Math.hypot(x, y) - o.R; }); };
+  let p = new Array(8).fill(0);
+  for (let round = 0; round < 3; round++) {
+    let lam = 1e-3, r = res(p, P), cost = r.reduce((a, v) => a + v * v, 0);
+    for (let it = 0; it < 25; it++) {
+      const J = [], eps = 1e-6;
+      for (let k = 0; k < 8; k++) { const q = p.slice(); q[k] += eps; const rk = res(q, P); J.push(rk.map((v, i) => (v - r[i]) / eps)); }
+      const A = [], b = [];
+      for (let a = 0; a < 8; a++) { const row = []; for (let c = 0; c < 8; c++) { let sum = 0; for (let i = 0; i < r.length; i++) sum += J[a][i] * J[c][i]; row.push(sum); } A.push(row); let sb = 0; for (let i = 0; i < r.length; i++) sb += J[a][i] * r[i]; b.push(-sb); }
+      for (let a = 0; a < 8; a++) A[a][a] += lam * (A[a][a] + 1e-3 * r.length);
+      const step = gauss(A, b); if (!step) break;
+      const q = p.map((v, i) => v + step[i]), rq = res(q, P), cq = rq.reduce((a, v) => a + v * v, 0);
+      if (cq < cost) { p = q; r = rq; const done = cost - cq < 1e-6 * cost; cost = cq; lam = Math.max(1e-7, lam / 3); if (done) break; }
+      else lam *= 4;
+    }
+    // drop points far off their ring (numbers, holes, a stray line) and fit again
+    const a = r.map(Math.abs), mad = quantile(a, 0.5) * 1.4826, lim = Math.max(0.6, 3 * mad);
+    const keep = P.filter((_, i) => a[i] <= lim); if (keep.length === P.length || keep.length < 60) break;
+    P = keep;
+  }
+  const D = Dof(p), Di = inv3(D); if (!Di) return null;
+  return mul3(H, Di);
+}
+// The ring numbers 1-6 sit on the four axes. Their darkness against angle, folded four times, gives the turn.
+function dfsRoll(S, H) {
+  let paper = [], sum = [0, 0], tot = 0;
+  for (let r = 156; r <= 294; r += 1.5) {
+    if ([180, 210, 240, 270].some(R => Math.abs(r - R) < 3.5)) continue;   // the ring lines themselves
+    for (let a = 0; a < 360; a += 0.75) {
+      const [u, v] = applyH(H, r * Math.cos(a * Math.PI / 180), r * Math.sin(a * Math.PI / 180)), q = S.at(u, v);
+      if (q && q.sat < 0.3) paper.push(q.y);
+    }
+  }
+  if (paper.length < 1000) return 0;
+  const white = quantile(paper, 0.9);
+  for (let r = 156; r <= 294; r += 1.5) {
+    if ([180, 210, 240, 270].some(R => Math.abs(r - R) < 3.5)) continue;
+    for (let a = 0; a < 360; a += 0.75) {
+      const t = a * Math.PI / 180, [u, v] = applyH(H, r * Math.cos(t), r * Math.sin(t)), q = S.at(u, v);
+      if (!q || q.sat >= 0.3) continue;
+      const wt = Math.max(0, 1 - q.y / white - 0.25);                   // only clearly dark print counts
+      sum[0] += wt * Math.cos(4 * t); sum[1] += wt * Math.sin(4 * t); tot += wt;
+    }
+  }
+  if (tot <= 0 || Math.hypot(sum[0], sum[1]) / tot < 0.15) return 0;   // no clear four-fold pattern: keep it upright
+  return Math.atan2(sum[1], sum[0]) / 4;
 }
 
 /* Transparency laid over any target, crosshair on its aim point. The target's own print is unknown, so holes are
@@ -1573,7 +1610,8 @@ const holeHooks = {
     c.lineWidth = 2; c.strokeStyle = "#ff2d95"; c.beginPath(); c.arc(size / 2, size / 2, r, 0, Math.PI * 2); c.stroke();
   }
 };
-const MARK_LABELS = ["REF", "2", "3", "4"];
+const MARK_LABELS = ["REF", "2", "3", "4"], DFS_LABELS = ["1 topp", "1 høyre", "1 bunn", "1 venstre"];
+const markLabel = i => (SHEETS[state.sheet] && SHEETS[state.sheet].dfs ? DFS_LABELS : MARK_LABELS)[i];
 const markerHooks = {
   hit(cx, cy, v) { const lim = 34 / v.s; let bi = -1, bd = lim; state.markersEdit.forEach((m, i) => { const d = Math.hypot(m.x - cx, m.y - cy); if (d < bd) { bd = d; bi = i; } }); return bi; },
   itemPos(i) { return state.markersEdit[i]; },
@@ -1595,8 +1633,9 @@ const markerHooks = {
       ctx.beginPath(); ctx.arc(p.x, p.y, 16, 0, Math.PI * 2); ctx.fillStyle = "rgba(255,45,149,.18)"; ctx.fill();
       ctx.lineWidth = 3.5; ctx.strokeStyle = "rgba(0,0,0,.6)"; ctx.stroke(); ctx.lineWidth = 2; ctx.strokeStyle = "#ff2d95"; ctx.stroke();
       ctx.beginPath(); ctx.moveTo(p.x - 7, p.y); ctx.lineTo(p.x + 7, p.y); ctx.moveTo(p.x, p.y - 7); ctx.lineTo(p.x, p.y + 7); ctx.stroke();
-      ctx.font = "600 12px " + (css("--f-body") || "sans-serif"); const t = MARK_LABELS[i], tw = ctx.measureText(t).width;
-      ctx.fillStyle = "rgba(10,12,11,.8)"; ctx.fillRect(p.x + 18, p.y - 22, tw + 10, 18); ctx.fillStyle = "#fff"; ctx.fillText(t, p.x + 23, p.y - 9);
+      ctx.font = "600 12px " + (css("--f-body") || "sans-serif"); const t = markLabel(i), tw = ctx.measureText(t).width;
+      const lx = p.x + 28 + tw > (v.c && v.c.clientWidth || 1e9) ? p.x - 28 - tw : p.x + 18;      // keep the label inside the view
+      ctx.fillStyle = "rgba(10,12,11,.8)"; ctx.fillRect(lx, p.y - 22, tw + 10, 18); ctx.fillStyle = "#fff"; ctx.fillText(t, lx + 5, p.y - 9);
     });
   },
   loupeOverlay(c, size) {
@@ -1671,7 +1710,7 @@ function updateGuideSheet() {
 }
 function drawCenterGuide(ctx, v) {
   const sh = SHEETS[state.guideSheet || state.sheet], P = PAGES[sh.paper];
-  const H = solveH([[-P.MX, P.MY], [P.MX, P.MY], [P.MX, -P.MY], [-P.MX, -P.MY]], state.markersEdit.map(m => [m.x, m.y]));
+  const H = solveH(pagePts(P), state.markersEdit.map(m => [m.x, m.y]));
   if (!H) return;
   const S = (x, y) => { const [px, py] = applyH(H, x, y); return v.toS(px, py); };
   const r = sh.multi ? sh.p.dr : sh.overlay ? 10 : 32, arm = r * 1.25, GUIDE = "#22D3EE";
@@ -1874,17 +1913,17 @@ function enterMarkers(msg) {
   state.markersEdit = (state.markers || defaultMarkers()).map(p => ({ ...p }));
   updateGuideSheet();
   $("toolsHoles").hidden = true; $("toolsMarkers").hidden = false; $("bSnapM").hidden = !!SHEETS[state.sheet].dfs;
-  setHint(SHEETS[state.sheet].dfs ? "Dra hjørnene til de blå sirklene ligger oppå ytterringen og kanten av det sorte feltet, og prikken midt i skiva."
+  setHint(SHEETS[state.sheet].dfs ? "Dra de fire punktene ut på ytterringen der den krysser aksene, ved de fire «1»-tallene."
     : state.snap ? "Dra hvert merke inn på hjørnefeltet, så finjusteres det til midten. Det blå krysset skal ligge oppå siktepunktet."
     : "Dra hvert merke til midten av hjørnefeltet. Det blå krysset skal ligge oppå siktepunktet.");
   viewer.setSource(state.src.canvas, state.src.w, state.src.h, 10);
   viewer.fit(0, 0, state.src.w, state.src.h);
-  setStatus(msg || (SHEETS[state.sheet].dfs ? "Juster hjørnene til de blå sirklene og krysset ligger oppå skivas ringer og tall. Trykk så «Bruk hjørnene»."
+  setStatus(msg || (SHEETS[state.sheet].dfs ? "Legg punktene på ytterringen ved de fire «1»-tallene. De blå sirklene skal da ligge oppå ytterringen og kanten av det sorte feltet. Trykk så «Bruk hjørnene»."
     : "Juster hjørnemerkene til det blå krysset og ruten ligger oppå det trykte siktepunktet. Trykk så «Bruk hjørnene»."), !!msg);
 }
 function defaultMarkers() {
   const w = state.src.w, h = state.src.h, mx = w * 0.12, my = h * 0.1;
-  if (SHEETS[state.sheet].dfs) { const r = Math.min(w, h) * 0.3; return [{ x: w / 2 - r, y: h / 2 - r }, { x: w / 2 + r, y: h / 2 - r }, { x: w / 2 + r, y: h / 2 + r }, { x: w / 2 - r, y: h / 2 + r }]; }
+  if (SHEETS[state.sheet].dfs) { const r = Math.min(w, h) * 0.42; return [{ x: w / 2, y: h / 2 - r }, { x: w / 2 + r, y: h / 2 }, { x: w / 2, y: h / 2 + r }, { x: w / 2 - r, y: h / 2 }]; }
   return [{ x: mx, y: my }, { x: w - mx, y: my }, { x: w - mx, y: h - my }, { x: mx, y: h - my }];
 }
 function redetect() {
@@ -1923,7 +1962,7 @@ async function changeSheet(sheet) {
     const f = SHEETS[sheet].dfs ? findDfs(state.src) : findMarkers(state.src);
     if (f && f.ok !== false) { state.markers = f.pts; if (!SHEETS[sheet].dfs) state.refs = f.refs; await analyse(); return; }
     state.markers = null; setBusy(null);
-    enterMarkers(SHEETS[sheet].dfs ? "Fant ikke det sorte feltet. Dra hjørnene til de blå sirklene ligger oppå skivas ringer." : "Fant ikke alle fire hjørnemerkene. Dra merkene på plass.");
+    enterMarkers(SHEETS[sheet].dfs ? "Fant ikke det sorte feltet. Dra de fire punktene ut på ytterringen ved de fire «1»-tallene." : "Fant ikke alle fire hjørnemerkene. Dra merkene på plass.");
     return;
   }
   if (!state.rect || !state.markers) { updateReadout(); return; }
@@ -1942,11 +1981,11 @@ async function processSource(src, isSample) {
     setBusy("Leter etter DFS-skiva…"); await frame();
     const dfs = findDfs(src);
     if (dfs) {
-      if (DBG.cur) DBG.cur.autoMarkers = { pts: ptsOut(dfs.pts), sheet: "dfs100", refs: 0, ok: true, rings: dfs.rings };
+      if (DBG.cur) DBG.cur.autoMarkers = { pts: ptsOut(dfs.pts), sheet: "dfs100", refs: 0, ok: true, rings: dfs.rings, outer: dfs.outer, roll: dfs.roll };
       state.markers = dfs.pts; state.refs = 0; state.sheetAuto = false; setSheet("dfs100");
       await analyse(); return;
     }
-    if (wantDfs) { state.markers = null; setBusy(null); enterMarkers("Fant ikke det sorte feltet på DFS-skiva. Dra hjørnene til de blå sirklene ligger oppå skivas ringer, eller ta et nytt bilde rett forfra."); return; }
+    if (wantDfs) { state.markers = null; setBusy(null); enterMarkers("Fant ikke det sorte feltet på DFS-skiva. Dra de fire punktene ut på ytterringen ved de fire «1»-tallene, eller ta et nytt bilde."); return; }
     if (!m) m = findMarkers(src);
   }
   if (!isSample && DBG.cur) DBG.cur.autoMarkers = m ? { pts: ptsOut(m.pts), sheet: m.sheet, refs: m.refs, ok: m.ok } : null;
@@ -1968,7 +2007,7 @@ function buildReport(opts = {}) {
   const sh = SHEETS[state.sheet], multi = !!sh.multi;
   const dfsHalf = sh.dfs ? clamp(Math.max(60, ...state.holes.map(h => Math.max(Math.abs(h.x), Math.abs(h.y)) + 25)), 60, 205) : 0;   // aim point and shots, at least ±6 cm
   const [x0, x1, y0, y1] = multi ? [sh.p.x0 - 3, sh.p.x1 + 3, sh.p.y0 - 0.8, sh.p.y1 + 0.8] : sh.dfs ? [-dfsHalf, dfsHalf, -dfsHalf, dfsHalf] : [-sh.g.GX - 8, sh.g.GX + 8, -sh.g.GY - 6, sh.g.GY + 6];
-  const m = state.markers, srcPPM = Math.hypot(m[1].x - m[0].x, m[1].y - m[0].y) / (2 * PG.MX);
+  const m = state.markers, Dm = markersD(), srcPPM = Math.hypot(m[1].x - m[0].x, m[1].y - m[0].y) / Math.hypot(Dm[1][0] - Dm[0][0], Dm[1][1] - Dm[0][1]);
   const ppmR = Math.max(4, Math.min((opts.maxW || 1500) / (x1 - x0), srcPPM * 1.1));
   const tgt = rectifyRegion(state.src, m, x0, x1, y0, y1, ppmR).canvas;
   const PAD = Math.round(tgt.width * 0.032), CW = tgt.width, W = CW + 2 * PAD, U = CW / 1500;
