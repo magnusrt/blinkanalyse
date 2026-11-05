@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Blinkanalyse">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="app-version" content="e9fccb8b">
+<meta name="app-version" content="984311bf">
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -407,7 +407,7 @@ details.cal-box summary { cursor: pointer; font-size: 0.86rem; font-weight: 500;
       <li>Kontroller de markerte hullene. Trykk for å legge til, dra for å flytte, og slett feil treff.</li>
     </ol>
     <p class="ro-note" style="margin-top:10px">Ladningstest: bruk A3-arkene med 6 blinker (ark 1 har blink 1–6, ark 2 har 7–12), A3-arket med 10 blinker, eller A4-arkene med én blink hver. Appen kjenner igjen arket på at begge hjørnemerkene øverst har hvitt hull, og leser papirstørrelse og arknummer fra koden nederst til høyre. Fyll inn «Skudd/blink» hvis hull har smeltet sammen.</p>
-    <p class="ro-note" style="margin-top:10px">DFS 100 m-pappskive: legg et blått eller grønt ark bak skiva og fotografer hele det sorte feltet rett forfra, med skivas overkant opp i bildet. Appen finner det sorte feltet og ringene selv, gir poeng per skudd (innertier merkes 10*) og regner korreksjonen som ellers. Er bildet tatt skrått eller rotert, bruk «Juster hjørner» og legg de blå sirklene oppå kanten av det sorte feltet og tieren.</p>
+    <p class="ro-note" style="margin-top:10px">DFS 100 m-pappskive: legg et blått eller grønt ark bak skiva og fotografer hele det sorte feltet rett forfra, med skivas overkant opp i bildet. Appen finner det sorte feltet og ringene selv, gir poeng per skudd (innertier merkes 10*) og regner korreksjonen som ellers. Er bildet tatt skrått eller rotert, bruk «Juster hjørner» og legg de blå sirklene oppå ytterringen og kanten av det sorte feltet, med prikken midt i skiva.</p>
     <p class="ro-note" style="margin-top:10px">Annen skive: skriv ut transparenten på transparentfilm og legg den over skiva med krysset på siktepunktet. Du kan lese treffpunkt, klikk og gruppe rett av den, eller ta bilde. Appen leser da bare hull der et blått eller grønt ark bak skiva skinner gjennom, så skivas eget trykk ikke forveksles med hull. Hjørnemerkene må ligge over lyst papir, og unngå gjenskinn fra plasten.</p>
   </section>
 </div>
@@ -1675,13 +1675,17 @@ function drawCenterGuide(ctx, v) {
   if (!H) return;
   const S = (x, y) => { const [px, py] = applyH(H, x, y); return v.toS(px, py); };
   const r = sh.multi ? sh.p.dr : sh.overlay ? 10 : 32, arm = r * 1.25, GUIDE = "#22D3EE";
-  if (sh.dfs) {                                                           // the black field's edge and the ten, as they should lie
+  if (sh.dfs) {                                  // as they should lie: the outer ring (1), the edge between 6 and 7, and the centre
+    const outer = DFS.rings[DFS.rings.length - 1];
     for (const [w, col] of [[4, "rgba(0,0,0,.55)"], [1.8, GUIDE]]) {
       ctx.lineWidth = w; ctx.strokeStyle = col;
-      for (const R of [DFS.black, 30]) { ctx.beginPath(); for (let a = 0; a <= 360; a += 6) { const q = S(R * Math.cos(a * Math.PI / 180), R * Math.sin(a * Math.PI / 180)); a ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); } ctx.stroke(); }
-      const h0 = S(-150, 0), h1 = S(150, 0), v0 = S(0, -150), v1 = S(0, 150);
+      for (const R of [outer, DFS.black]) { ctx.beginPath(); for (let a = 0; a <= 360; a += 4) { const q = S(R * Math.cos(a * Math.PI / 180), R * Math.sin(a * Math.PI / 180)); a ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); } ctx.stroke(); }
+      const h0 = S(-outer, 0), h1 = S(outer, 0), v0 = S(0, -outer), v1 = S(0, outer);     // along the axes, where the ring numbers are
       ctx.beginPath(); ctx.moveTo(h0.x, h0.y); ctx.lineTo(h1.x, h1.y); ctx.moveTo(v0.x, v0.y); ctx.lineTo(v1.x, v1.y); ctx.stroke();
     }
+    const c = S(0, 0);
+    ctx.beginPath(); ctx.arc(c.x, c.y, 4, 0, Math.PI * 2); ctx.fillStyle = GUIDE; ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = "rgba(0,0,0,.6)"; ctx.stroke();
     return;
   }
   for (const a of sh.aims) {
@@ -1870,12 +1874,13 @@ function enterMarkers(msg) {
   state.markersEdit = (state.markers || defaultMarkers()).map(p => ({ ...p }));
   updateGuideSheet();
   $("toolsHoles").hidden = true; $("toolsMarkers").hidden = false; $("bSnapM").hidden = !!SHEETS[state.sheet].dfs;
-  setHint(SHEETS[state.sheet].dfs ? "Dra hjørnene til de blå sirklene ligger oppå kanten av det sorte feltet og tieren."
+  setHint(SHEETS[state.sheet].dfs ? "Dra hjørnene til de blå sirklene ligger oppå ytterringen og kanten av det sorte feltet, og prikken midt i skiva."
     : state.snap ? "Dra hvert merke inn på hjørnefeltet, så finjusteres det til midten. Det blå krysset skal ligge oppå siktepunktet."
     : "Dra hvert merke til midten av hjørnefeltet. Det blå krysset skal ligge oppå siktepunktet.");
   viewer.setSource(state.src.canvas, state.src.w, state.src.h, 10);
   viewer.fit(0, 0, state.src.w, state.src.h);
-  setStatus(msg || "Juster hjørnemerkene til det blå krysset og ruten ligger oppå det trykte siktepunktet. Trykk så «Bruk hjørnene».", !!msg);
+  setStatus(msg || (SHEETS[state.sheet].dfs ? "Juster hjørnene til de blå sirklene og krysset ligger oppå skivas ringer og tall. Trykk så «Bruk hjørnene»."
+    : "Juster hjørnemerkene til det blå krysset og ruten ligger oppå det trykte siktepunktet. Trykk så «Bruk hjørnene»."), !!msg);
 }
 function defaultMarkers() {
   const w = state.src.w, h = state.src.h, mx = w * 0.12, my = h * 0.1;
