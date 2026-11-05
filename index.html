@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Blinkanalyse">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="app-version" content="299299c5">
+<meta name="app-version" content="e9fccb8b">
 <style>
 :root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 body{margin:0;font:14px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -983,8 +983,10 @@ function analyseRect(img, sheet) {
 }
 function estimateBacking(A) {
   const { H, S, V, tm, N } = A, hist = new Float64Array(36);
+  // on another target's black print, a camera tint can look saturated; the sheet behind a hole is never that dark
+  const vLow = A.sheet.colorOnly ? 0.3 : 0.1;
   for (let i = 0; i < N; i += 2) {
-    if (tm[i] === 2 || tm[i] === 4 || S[i] <= 0.3 || V[i] <= 0.1) continue;
+    if (tm[i] === 2 || tm[i] === 4 || S[i] <= 0.3 || V[i] <= vLow) continue;
     const hh = H[i]; if (hh >= 8 && hh <= 48) continue;      // ignore the orange aim mark
     if (A.sheet.overlay && (hh >= 335 || hh < 8)) continue;  // and the transparency's own red circles
     hist[Math.floor(hh / 10) % 36]++;
@@ -994,7 +996,7 @@ function estimateBacking(A) {
   if (bv * 2 < 160) return null;
   const c = best * 10 + 5; let cx = 0, cy = 0; const ss = [], vv = [];
   for (let i = 0; i < N; i += 2) {
-    if (tm[i] === 2 || tm[i] === 4 || S[i] <= 0.3 || V[i] <= 0.1 || hueDist(H[i], c) > 15) continue;
+    if (tm[i] === 2 || tm[i] === 4 || S[i] <= 0.3 || V[i] <= vLow || hueDist(H[i], c) > 15) continue;
     const r = H[i] * Math.PI / 180; cx += Math.cos(r); cy += Math.sin(r); ss.push(S[i]); vv.push(V[i]);
   }
   let hue = Math.atan2(cy, cx) * 180 / Math.PI; if (hue < 0) hue += 360;
@@ -1891,7 +1893,7 @@ function redetect() {
   updateDeleteBtn(); updateModeChip(); updateReadout();
   const n = state.holes.length, load = isMulti(), nr0 = load ? SHEETS[state.sheet].offset : 0;
   const off = load && state.shots ? loadRows().map((st, i) => ({ i, n: st.n })).filter(r => r.n && r.n !== state.shots) : [];
-  if (!n && res.mode === "none") setStatus("Under transparenten ser appen bare hull der et blått eller grønt ark skinner gjennom. Legg et farget ark bak skiva og ta nytt bilde, bruk «Velg farge», eller trykk på hullene for å legge dem til.", true);
+  if (!n && res.mode === "none") setStatus(`${sheet.dfs ? "På DFS-skiva" : "Under transparenten"} ser appen bare hull der et blått eller grønt ark bak skiva skinner gjennom, så det sorte trykket ikke tas for hull. Legg et farget ark bak skiva og ta nytt bilde, bruk «Velg farge», eller trykk på hullene for å legge dem til.`, true);
   else if (!n) setStatus("Fant ingen hull. Trykk på hullene for å legge dem til, eller bruk «Velg farge».", true);
   else if (load && off.length) setStatus(`Avviker fra ${state.shots} skudd per blink: ${off.map(r => `blink ${nr0 + r.i + 1} har ${r.n}`).join(", ")}. Slett feil treff eller legg til manglende hull.`, true);
   else if (!load && state.shots && n !== state.shots) setStatus(`Fant ${n} hull, men du har oppgitt ${state.shots} skudd. Slett feil treff eller legg til manglende hull.`, true);
